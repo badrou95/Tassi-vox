@@ -111,6 +111,62 @@ export function normalizeEmail(email: string | null | undefined): string {
   return (email || '').trim().toLowerCase();
 }
 
+export interface AuthUserLike {
+  email?: string | null;
+  emailVerified?: boolean;
+  providerData?: ReadonlyArray<{
+    providerId?: string | null;
+    email?: string | null;
+  }>;
+}
+
+/**
+ * Resolves the user's verified email address safely.
+ * Supports both standard Firebase Auth ("One account per email") where user.email
+ * and user.emailVerified are populated on the root object, AND multi-account mode
+ * ("Create multiple accounts for each identity provider") where Google Sign-In stores
+ * the verified email inside providerData[providerId === 'google.com'].
+ */
+export function extractVerifiedIdentity(user: AuthUserLike | null | undefined): {
+  email: string;
+  emailVerified: boolean;
+} {
+  if (!user) return { email: '', emailVerified: false };
+
+  const directEmail = normalizeEmail(user.email);
+  if (directEmail) {
+    const hasGoogleProvider = Boolean(
+      user.providerData?.some(
+        (p) => p.providerId === 'google.com' && normalizeEmail(p.email) === directEmail
+      )
+    );
+    return {
+      email: directEmail,
+      emailVerified: Boolean(user.emailVerified) || hasGoogleProvider,
+    };
+  }
+
+  const googleProfile = user.providerData?.find(
+    (p) => p.providerId === 'google.com' && normalizeEmail(p.email).length > 0
+  );
+  if (googleProfile) {
+    return {
+      email: normalizeEmail(googleProfile.email),
+      emailVerified: true,
+    };
+  }
+
+  const fallbackProfile = user.providerData?.find((p) => normalizeEmail(p.email).length > 0);
+  if (fallbackProfile) {
+    return {
+      email: normalizeEmail(fallbackProfile.email),
+      emailVerified: Boolean(user.emailVerified),
+    };
+  }
+
+  return { email: '', emailVerified: false };
+}
+
 export function emailToDocId(email: string): string {
   return normalizeEmail(email).replace(/[^a-z0-9]/g, '_');
 }

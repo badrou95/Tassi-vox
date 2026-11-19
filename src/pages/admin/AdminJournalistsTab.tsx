@@ -23,6 +23,19 @@ const EMPTY_JOURNALIST: Journalist = {
   isVisible: true,
 };
 
+function formatErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  try {
+    const parsed = JSON.parse(error.message) as { error?: string; path?: string };
+    if (parsed && typeof parsed.error === 'string') {
+      return `Firebase (${parsed.path || 'écriture'}) : ${parsed.error}`;
+    }
+  } catch {
+    // Plain error message
+  }
+  return error.message || fallback;
+}
+
 export const AdminJournalistsTab: React.FC = () => {
   const {
     journalists,
@@ -37,13 +50,17 @@ export const AdminJournalistsTab: React.FC = () => {
   const [isNew, setIsNew] = useState(false);
   const [areasFrInput, setAreasFrInput] = useState('');
   const [areasArInput, setAreasArInput] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
+  const canDeleteJournalist = isFounder || currentPermissions.manage_journalists;
+
   const openEditor = (j: Journalist | null) => {
     setErr('');
     setMsg('');
+    setConfirmDeleteId(null);
     if (!j) {
       setIsNew(true);
       setEditing(structuredClone(EMPTY_JOURNALIST));
@@ -67,7 +84,7 @@ export const AdminJournalistsTab: React.FC = () => {
       setEditing({ ...editing, photoUrl: url });
       setMsg('Portrait téléversé dans Firebase Storage.');
     } catch (uploadErr) {
-      setErr(uploadErr instanceof Error ? uploadErr.message : 'Erreur lors du téléversement.');
+      setErr(formatErrorMessage(uploadErr, 'Erreur lors du téléversement.'));
     } finally {
       setBusy(false);
     }
@@ -78,8 +95,10 @@ export const AdminJournalistsTab: React.FC = () => {
     if (!editing) return;
     setErr('');
     setMsg('');
-    if (editing.fullNameFr.trim().length < 2 || editing.fullNameAr.trim().length < 2) {
-      setErr('Veuillez indiquer le nom du journaliste en français et en arabe.');
+    const hasFrName = editing.fullNameFr.trim().length >= 2;
+    const hasArName = editing.fullNameAr.trim().length >= 2;
+    if (!hasFrName && !hasArName) {
+      setErr('Veuillez indiquer au moins le nom du journaliste en français ou en arabe (2 caractères min.).');
       return;
     }
     setBusy(true);
@@ -101,7 +120,7 @@ export const AdminJournalistsTab: React.FC = () => {
       setEditing(null);
       setMsg('Fiche journaliste enregistrée dans Firebase.');
     } catch (saveErr) {
-      setErr(saveErr instanceof Error ? saveErr.message : 'Erreur lors de la sauvegarde.');
+      setErr(formatErrorMessage(saveErr, 'Erreur lors de la sauvegarde.'));
     } finally {
       setBusy(false);
     }
@@ -109,8 +128,32 @@ export const AdminJournalistsTab: React.FC = () => {
 
   const toggleVisibility = async (j: Journalist) => {
     setBusy(true);
+    setErr('');
+    setMsg('');
     try {
       await saveJournalist({ ...j, isVisible: !j.isVisible }, false);
+      setMsg(
+        !j.isVisible
+          ? `Le profil de ${j.fullNameFr || j.fullNameAr} est de nouveau public.`
+          : `Le profil de ${j.fullNameFr || j.fullNameAr} est masqué (articles conservés).`
+      );
+    } catch (toggleErr) {
+      setErr(formatErrorMessage(toggleErr, 'Impossible de modifier la visibilité.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (j: Journalist) => {
+    setBusy(true);
+    setErr('');
+    setMsg('');
+    try {
+      await deleteJournalist(j.id);
+      setConfirmDeleteId(null);
+      setMsg(`Journaliste « ${j.fullNameFr || j.fullNameAr} » supprimé de Firebase.`);
+    } catch (delErr) {
+      setErr(formatErrorMessage(delErr, 'Suppression impossible.'));
     } finally {
       setBusy(false);
     }
@@ -157,10 +200,11 @@ export const AdminJournalistsTab: React.FC = () => {
       {editing ? (
         <form
           onSubmit={handleSave}
+          noValidate
           className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5"
         >
           <h2 className="font-editorial text-xl font-bold text-slate-950 dark:text-white">
-            {isNew ? 'Nouveau profil journaliste' : `Modifier ${editing.fullNameFr}`}
+            {isNew ? 'Nouveau profil journaliste' : `Modifier ${editing.fullNameFr || editing.fullNameAr}`}
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -300,24 +344,48 @@ export const AdminJournalistsTab: React.FC = () => {
             <span>Afficher publiquement sur « Notre équipe »</span>
           </label>
 
+          {err && (
+            <div role="alert" className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300">
+              {err}
+            </div>
+          )}
+
           <div className="flex items-center gap-3 pt-2">
             <button
               type="submit"
               disabled={busy}
-              className="px-5 py-2 rounded-lg text-sm font-bold text-white"
+              className="px-5 py-2.5 rounded-lg text-sm font-bold text-white disabled:opacity-60"
               style={{ backgroundColor: effectiveSettings.primaryColor }}
             >
-              Enregistrer la fiche
+              {busy ? 'Enregistrement…' : 'Enregistrer la fiche'}
             </button>
             <button
               type="button"
-              onClick={() => setEditing(null)}
+              onClick={() => {
+                setErr('');
+                setEditing(null);
+              }}
               className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-500"
             >
               Annuler
             </button>
           </div>
         </form>
+      ) : journalists.length === 0 ? (
+        <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center space-y-3">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Aucun journaliste enregistré pour le moment.
+          </p>
+          <button
+            type="button"
+            onClick={() => openEditor(null)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-white"
+            style={{ backgroundColor: effectiveSettings.primaryColor }}
+          >
+            <Plus className="w-4 h-4" />
+            <span>Ajouter le premier journaliste</span>
+          </button>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {journalists.map((j) => (
@@ -327,44 +395,70 @@ export const AdminJournalistsTab: React.FC = () => {
             >
               <div className="flex items-start gap-3.5 min-w-0">
                 <div className="w-14 h-14 rounded-full overflow-hidden shrink-0 bg-slate-200 dark:bg-slate-800">
-                  <EditorialImage src={j.photoUrl} alt={j.fullNameFr} className="w-full h-full object-cover" />
+                  <EditorialImage src={j.photoUrl} alt={j.fullNameFr || j.fullNameAr} className="w-full h-full object-cover" />
                 </div>
                 <div className="min-w-0 space-y-1">
                   <h3 className="font-bold text-base text-slate-950 dark:text-white truncate">
-                    {j.fullNameFr}
+                    {j.fullNameFr || j.fullNameAr}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                    {j.roleFr} · {j.isVisible ? 'Public' : 'Masqué (historique préservé)'}
+                    {j.roleFr || j.roleAr || 'Journaliste'} · {j.isVisible ? 'Public' : 'Masqué (historique préservé)'}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => openEditor(j)}
-                  aria-label={`Modifier ${j.fullNameFr}`}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleVisibility(j)}
-                  aria-label={j.isVisible ? `Masquer ${j.fullNameFr}` : `Afficher ${j.fullNameFr}`}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  {j.isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-                {isFounder && (
-                  <button
-                    type="button"
-                    onClick={() => void deleteJournalist(j.id)}
-                    aria-label={`Supprimer ${j.fullNameFr}`}
-                    className="p-2 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                {confirmDeleteId === j.id ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleDelete(j)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-60"
+                    >
+                      {busy ? '…' : 'Confirmer'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="px-2 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => openEditor(j)}
+                      aria-label={`Modifier ${j.fullNameFr || j.fullNameAr}`}
+                      className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void toggleVisibility(j)}
+                      aria-label={j.isVisible ? `Masquer ${j.fullNameFr || j.fullNameAr}` : `Afficher ${j.fullNameFr || j.fullNameAr}`}
+                      className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    >
+                      {j.isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                    {canDeleteJournalist && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setConfirmDeleteId(j.id)}
+                        aria-label={`Supprimer ${j.fullNameFr || j.fullNameAr}`}
+                        className="p-2 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

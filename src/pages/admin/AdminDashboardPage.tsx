@@ -41,6 +41,7 @@ type AdminTab =
 export const AdminDashboardPage: React.FC = () => {
   const {
     user,
+    userEmail,
     authReady,
     isFamilyMember,
     isFounder,
@@ -169,7 +170,7 @@ export const AdminDashboardPage: React.FC = () => {
               </span>
             </div>
             <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
-              {user.email}
+              {userEmail || user.email}
             </p>
           </div>
 

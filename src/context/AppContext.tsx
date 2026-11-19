@@ -13,6 +13,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -54,6 +55,7 @@ import {
   canModifyAdminAccount,
   canUserPerform,
   emailToDocId,
+  extractVerifiedIdentity,
   isAuthorizedFamilyAdmin,
   isFounderEmail,
   normalizeEmail,
@@ -71,6 +73,8 @@ interface AppContextValue {
 
   // Auth & Family RBAC
   user: User | null;
+  userEmail: string;
+  emailVerified: boolean;
   authReady: boolean;
   isFamilyMember: boolean;
   isFounder: boolean;
@@ -167,6 +171,11 @@ function sanitizeSocials(socials: SiteSettings['socials'] | undefined): SiteSett
   return out;
 }
 
+function sanitizeHexColor(val: string | undefined, fallback: string): string {
+  const cleaned = (val || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(cleaned) ? cleaned : fallback;
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light';
@@ -234,8 +243,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return DEFAULT_ADMIN_USERS;
   }, [firestoreAdminUsers]);
 
-  const userEmail = normalizeEmail(user?.email);
-  const emailVerified = Boolean(user?.emailVerified);
+  const resolvedIdentity = useMemo(() => extractVerifiedIdentity(user), [user]);
+  const userEmail = resolvedIdentity.email;
+  const emailVerified = resolvedIdentity.emailVerified;
 
   const isFounder = useMemo(
     () => canApproveOrPublish(userEmail, emailVerified),
@@ -283,7 +293,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<BreakingNewsItem, 'id'>) }))
           .sort((a, b) => a.sortOrder - b.sortOrder);
-        setFirestoreBreaking(list.length > 0 ? list : null);
+        setFirestoreBreaking(list);
       },
       (err) => {
         console.warn('breakingNews listener fallback:', err.message);
@@ -299,7 +309,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       articlesQuery,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Article, 'id'>) }));
-        setFirestoreArticles(list.length > 0 ? list : null);
+        setFirestoreArticles(list);
       },
       (err) => {
         console.warn('articles listener fallback:', err.message);
@@ -314,7 +324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       journalistsQuery,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Journalist, 'id'>) }));
-        setFirestoreJournalists(list.length > 0 ? list : null);
+        setFirestoreJournalists(list);
       },
       (err) => {
         console.warn('journalists listener fallback:', err.message);
@@ -438,7 +448,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     root.style.setProperty('--tv-breaking', effectiveSettings.breakingColor);
   }, [effectiveSettings]);
 
-  const articles = firestoreArticles || DEFAULT_ARTICLES;
+  const isFirestoreSeeded = Boolean(
+    firestoreSettings ||
+      (firestoreArticles && firestoreArticles.length > 0) ||
+      (firestoreJournalists && firestoreJournalists.length > 0) ||
+      (firestoreBreaking && firestoreBreaking.length > 0) ||
+      firestoreAdminUsers.length > 0
+  );
+
+  const articles =
+    firestoreArticles && (firestoreArticles.length > 0 || firestoreSettings)
+      ? firestoreArticles
+      : DEFAULT_ARTICLES;
   const publishedArticles = useMemo(
     () =>
       articles
@@ -447,7 +468,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [articles]
   );
 
-  const breakingNews = firestoreBreaking || DEFAULT_BREAKING_NEWS;
+  const breakingNews =
+    firestoreBreaking && (firestoreBreaking.length > 0 || firestoreSettings)
+      ? firestoreBreaking
+      : DEFAULT_BREAKING_NEWS;
   const activeBreakingNews = useMemo(
     () =>
       breakingNews
@@ -456,13 +480,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [breakingNews]
   );
 
-  const journalists = firestoreJournalists || DEFAULT_JOURNALISTS;
+  const journalists =
+    firestoreJournalists && (firestoreJournalists.length > 0 || firestoreSettings)
+      ? firestoreJournalists
+      : DEFAULT_JOURNALISTS;
   const visibleJournalists = useMemo(
     () => journalists.filter((j) => j.isVisible),
     [journalists]
   );
-
-  const isFirestoreSeeded = Boolean(firestoreSettings || firestoreArticles || firestoreAdminUsers.length > 0);
 
   // Helper: Append immutable audit log
   const writeAuditLog = useCallback(
@@ -624,10 +649,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sloganAr: clampString(next.sloganAr, 200),
         descriptionFr: clampString(next.descriptionFr, 600),
         descriptionAr: clampString(next.descriptionAr, 600),
-        primaryColor: next.primaryColor,
-        secondaryColor: next.secondaryColor,
-        accentColor: next.accentColor,
-        breakingColor: next.breakingColor,
+        primaryColor: sanitizeHexColor(next.primaryColor, DEFAULT_SITE_SETTINGS.primaryColor),
+        secondaryColor: sanitizeHexColor(next.secondaryColor, DEFAULT_SITE_SETTINGS.secondaryColor),
+        accentColor: sanitizeHexColor(next.accentColor, DEFAULT_SITE_SETTINGS.accentColor),
+        breakingColor: sanitizeHexColor(next.breakingColor, DEFAULT_SITE_SETTINGS.breakingColor),
         breakingBannerEnabled: Boolean(next.breakingBannerEnabled),
         heroTitleFr: clampString(next.heroTitleFr, 160),
         heroTitleAr: clampString(next.heroTitleAr, 160),
@@ -672,7 +697,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const id = isNew ? `bn_${Date.now()}` : item.id;
       const docRef = doc(db, 'breakingNews', id);
       try {
-        if (isNew) {
+        const existsInDb = !isNew && (await getDoc(docRef)).exists();
+        if (isNew || !existsInDb) {
           await setDoc(docRef, {
             textFr: clampString(item.textFr, 260),
             textAr: clampString(item.textAr, 260),
@@ -717,13 +743,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Permission requise pour supprimer une alerte.');
       }
       try {
-        await deleteDoc(doc(db, 'breakingNews', id));
+        const hasLiveItems = Boolean(firestoreBreaking && firestoreBreaking.length > 0);
+        if (!hasLiveItems) {
+          const batch = writeBatch(db);
+          const remaining = DEFAULT_BREAKING_NEWS.filter((b) => b.id !== id);
+          for (const b of remaining) {
+            batch.set(doc(db, 'breakingNews', b.id), {
+              textFr: b.textFr,
+              textAr: b.textAr,
+              articleSlug: b.articleSlug,
+              status: b.status,
+              sortOrder: b.sortOrder,
+              durationSeconds: b.durationSeconds,
+              expiresAt: b.expiresAt,
+              createdByUid: user.uid,
+              createdByEmail: userEmail,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          if (!firestoreSettings && canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
+            batch.set(doc(db, 'siteSettings', 'main'), {
+              ...DEFAULT_SITE_SETTINGS,
+              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
+              updatedByEmail: userEmail,
+              updatedAt: serverTimestamp(),
+            });
+          }
+          await batch.commit();
+        } else {
+          await deleteDoc(doc(db, 'breakingNews', id));
+        }
         await writeAuditLog('DELETE_BREAKING_NEWS', 'breakingNews', id, 'Suppression d’une alerte Dernière Minute.');
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `breakingNews/${id}`);
       }
     },
-    [user, userEmail, emailVerified, adminUsers, writeAuditLog]
+    [user, userEmail, emailVerified, adminUsers, firestoreBreaking, firestoreSettings, writeAuditLog]
   );
 
   // Save Article (strictly validates Founder-only publish rule)
@@ -757,7 +813,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const docRef = doc(db, 'articles', id);
       try {
-        if (isNew) {
+        const existsInDb = !isNew && (await getDoc(docRef)).exists();
+        if (isNew || !existsInDb) {
           const isPublishingNow = isFounder && article.status === 'published';
           const isApprovingNow = isFounder && (article.status === 'approved' || article.status === 'published');
           await setDoc(docRef, {
@@ -922,15 +979,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ownerUid: clampString(journalist.ownerUid, 128),
         isVisible: Boolean(journalist.isVisible),
       };
+      const docRef = doc(db, 'journalists', id);
       try {
-        if (isNew) {
-          await setDoc(doc(db, 'journalists', id), {
+        const existsInDb = !isNew && (await getDoc(docRef)).exists();
+        if (isNew || !existsInDb) {
+          await setDoc(docRef, {
             ...basePayload,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
         } else {
-          await updateDoc(doc(db, 'journalists', id), {
+          await updateDoc(docRef, {
             ...basePayload,
             updatedAt: serverTimestamp(),
           });
@@ -939,7 +998,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isNew ? 'CREATE_JOURNALIST' : 'UPDATE_JOURNALIST',
           'journalists',
           id,
-          `Profil journaliste "${basePayload.fullNameFr}" (visible: ${basePayload.isVisible ? 'oui' : 'masqué'}).`
+          `Profil journaliste "${basePayload.fullNameFr || basePayload.fullNameAr}" (visible: ${basePayload.isVisible ? 'oui' : 'masqué'}).`
         );
       } catch (err) {
         handleFirestoreError(err, isNew ? OperationType.CREATE : OperationType.UPDATE, `journalists/${id}`);
@@ -996,17 +1055,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteJournalist = useCallback(
     async (id: string) => {
-      if (!user || !isFounder) {
-        throw new Error('Seul le fondateur peut supprimer définitivement une fiche journaliste.');
+      if (!user || (!isFounder && !canUserPerform(userEmail, emailVerified, 'manage_journalists', adminUsers))) {
+        throw new Error('Permission "Gérer les profils des journalistes" requise pour supprimer une fiche.');
       }
       try {
-        await deleteDoc(doc(db, 'journalists', id));
+        const hasLiveJournalists = Boolean(firestoreJournalists && firestoreJournalists.length > 0);
+        if (!hasLiveJournalists && !firestoreSettings) {
+          // Starter catalog has not been materialized in Firestore yet:
+          // persist remaining starter journalists + siteSettings so the deleted journalist disappears immediately.
+          const batch = writeBatch(db);
+          const remaining = DEFAULT_JOURNALISTS.filter((j) => j.id !== id);
+          for (const j of remaining) {
+            batch.set(doc(db, 'journalists', j.id), {
+              fullNameFr: j.fullNameFr,
+              fullNameAr: j.fullNameAr,
+              roleFr: j.roleFr,
+              roleAr: j.roleAr,
+              bioFr: j.bioFr,
+              bioAr: j.bioAr,
+              careerFr: j.careerFr,
+              careerAr: j.careerAr,
+              coverageAreasFr: j.coverageAreasFr,
+              coverageAreasAr: j.coverageAreasAr,
+              photoUrl: j.photoUrl,
+              socials: sanitizeSocials(j.socials),
+              ownerUid: j.ownerUid,
+              isVisible: j.isVisible,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          if (canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
+            batch.set(doc(db, 'siteSettings', 'main'), {
+              ...DEFAULT_SITE_SETTINGS,
+              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
+              updatedByEmail: userEmail,
+              updatedAt: serverTimestamp(),
+            });
+          }
+          await batch.commit();
+        } else {
+          await deleteDoc(doc(db, 'journalists', id));
+          // Ensure deleting the last journalist does not resurrect starter defaults
+          if (
+            firestoreJournalists &&
+            firestoreJournalists.length <= 1 &&
+            !firestoreSettings &&
+            canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)
+          ) {
+            await setDoc(doc(db, 'siteSettings', 'main'), {
+              ...DEFAULT_SITE_SETTINGS,
+              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
+              updatedByEmail: userEmail,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
         await writeAuditLog('DELETE_JOURNALIST', 'journalists', id, 'Suppression d’une fiche journaliste.');
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `journalists/${id}`);
       }
     },
-    [user, isFounder, writeAuditLog]
+    [user, isFounder, userEmail, emailVerified, adminUsers, firestoreJournalists, firestoreSettings, writeAuditLog]
   );
 
   // External journalist secure submission
@@ -1172,6 +1282,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     language,
     setLanguage,
     user,
+    userEmail,
+    emailVerified,
     authReady,
     isFamilyMember,
     isFounder,

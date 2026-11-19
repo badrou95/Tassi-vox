@@ -10,6 +10,7 @@ export const SubmissionPortalPage: React.FC = () => {
     language,
     effectiveSettings,
     user,
+    userEmail,
     signInWithGoogle,
     logout,
     submissions,
@@ -163,7 +164,7 @@ export const SubmissionPortalPage: React.FC = () => {
                   <span className="text-slate-500 dark:text-slate-400">
                     {language === 'ar' ? 'متصل بحساب:' : 'Connecté en tant que :'}{' '}
                   </span>
-                  <strong className="text-slate-950 dark:text-white">{user.email}</strong>
+                  <strong className="text-slate-950 dark:text-white">{userEmail || user.email}</strong>
                 </div>
                 <div className="flex items-center gap-3">
                   {myJournalistProfile && (

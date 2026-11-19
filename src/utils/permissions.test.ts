@@ -8,6 +8,7 @@ import {
   canEditJournalistProfile,
   canModifyAdminAccount,
   canUserPerform,
+  extractVerifiedIdentity,
   isAuthorizedFamilyAdmin,
   resolveEffectivePermissions,
   validateArticleTransition,
@@ -152,4 +153,35 @@ test('external journalist can edit ONLY their own linked public bio and gets zer
   });
   assert.equal(otherEdit.canEditOwnBioOnly, false);
   assert.equal(otherEdit.canEditFull, false);
+});
+
+test('extractVerifiedIdentity resolves Google email from providerData in multi-account Firebase mode', () => {
+  // Multi-account mode: root email is null and emailVerified is false, but google.com provider has the email
+  const multiAccountGoogleUser = {
+    email: null,
+    emailVerified: false,
+    providerData: [{ providerId: 'google.com', email: 'Badroumc@Gmail.com' }],
+  };
+  const resolved = extractVerifiedIdentity(multiAccountGoogleUser);
+  assert.equal(resolved.email, TECH_DIRECTOR_EMAIL);
+  assert.equal(resolved.emailVerified, true);
+  assert.equal(
+    isAuthorizedFamilyAdmin(resolved.email, resolved.emailVerified, DEFAULT_ADMIN_USERS),
+    true
+  );
+
+  // Unverified password-only account must remain unverified
+  const unverifiedPasswordUser = {
+    email: TECH_DIRECTOR_EMAIL,
+    emailVerified: false,
+    providerData: [{ providerId: 'password', email: TECH_DIRECTOR_EMAIL }],
+  };
+  const unverified = extractVerifiedIdentity(unverifiedPasswordUser);
+  assert.equal(unverified.email, TECH_DIRECTOR_EMAIL);
+  assert.equal(unverified.emailVerified, false);
+
+  // Anonymous user has no email and is unverified
+  const anon = extractVerifiedIdentity({ email: null, emailVerified: false, providerData: [] });
+  assert.equal(anon.email, '');
+  assert.equal(anon.emailVerified, false);
 });

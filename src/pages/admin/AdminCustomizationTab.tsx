@@ -1,9 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, Palette, Plus, Save, Trash2, Upload } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import type { SiteSettings } from '../../types';
 import { uploadMediaFile } from '../../lib/firebase';
+
+function formatSaveError(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  try {
+    const parsed = JSON.parse(error.message) as { error?: string; path?: string };
+    if (parsed && typeof parsed.error === 'string') {
+      return `Firebase (${parsed.path || 'siteSettings'}) : ${parsed.error}`;
+    }
+  } catch {
+    // Plain error message
+  }
+  return error.message || fallback;
+}
 
 const VIVID_PRESETS = [
   {
@@ -34,12 +47,24 @@ export const AdminCustomizationTab: React.FC = () => {
     useApp();
   const navigate = useNavigate();
 
-  const [draft, setDraft] = useState<SiteSettings>(() =>
+  const [draft, setDraftState] = useState<SiteSettings>(() =>
     structuredClone(previewSettings || siteSettings)
   );
+  const dirtyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (!dirtyRef.current && !previewSettings) {
+      setDraftState(structuredClone(siteSettings));
+    }
+  }, [siteSettings, previewSettings]);
+
+  const setDraft: React.Dispatch<React.SetStateAction<SiteSettings>> = (next) => {
+    dirtyRef.current = true;
+    setDraftState(next);
+  };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -51,7 +76,7 @@ export const AdminCustomizationTab: React.FC = () => {
       setDraft((prev) => ({ ...prev, logoUrl: url }));
       setSavedMsg('Logo téléversé dans Firebase Storage. Cliquez sur Enregistrer pour publier.');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Erreur de téléversement du logo.');
+      setErrorMsg(formatSaveError(err, 'Erreur de téléversement du logo.'));
     } finally {
       setBusy(false);
     }
@@ -69,9 +94,10 @@ export const AdminCustomizationTab: React.FC = () => {
     setSavedMsg('');
     try {
       await saveSiteSettings(draft);
+      dirtyRef.current = false;
       setSavedMsg('Paramètres enregistrés dans Firebase et appliqués en direct sur le site public.');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Erreur lors de l’enregistrement.');
+      setErrorMsg(formatSaveError(err, 'Erreur lors de l’enregistrement.'));
     } finally {
       setBusy(false);
     }
@@ -101,7 +127,7 @@ export const AdminCustomizationTab: React.FC = () => {
   };
 
   return (
-    <form onSubmit={handleSave} className="space-y-8">
+    <form onSubmit={handleSave} noValidate className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="font-editorial text-2xl font-bold text-slate-950 dark:text-white">
@@ -493,6 +519,38 @@ export const AdminCustomizationTab: React.FC = () => {
           </label>
         </div>
       </section>
+
+      {errorMsg && (
+        <div role="alert" className="p-3.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-sm text-red-700 dark:text-red-300">
+          {errorMsg}
+        </div>
+      )}
+      {savedMsg && (
+        <div role="status" className="p-3.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-sm text-emerald-800 dark:text-emerald-300">
+          {savedMsg}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
+        <button
+          type="button"
+          onClick={handlePreview}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+        >
+          <Eye className="w-4 h-4" />
+          <span>Prévisualiser avant validation</span>
+        </button>
+
+        <button
+          type="submit"
+          disabled={busy}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold text-white disabled:opacity-60"
+          style={{ backgroundColor: draft.primaryColor }}
+        >
+          <Save className="w-4 h-4" />
+          <span>{busy ? 'Enregistrement…' : 'Enregistrer dans Firebase'}</span>
+        </button>
+      </div>
     </form>
   );
 };

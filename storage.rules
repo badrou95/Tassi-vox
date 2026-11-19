@@ -1,15 +1,44 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function isVerifiedFamily() {
+    function hasDirectVerifiedEmail() {
       return request.auth != null
-        && request.auth.token.email != null
-        && request.auth.token.email_verified == true
+        && 'email' in request.auth.token
+        && request.auth.token.email is string
+        && request.auth.token.email.size() > 0
+        && 'email_verified' in request.auth.token
+        && request.auth.token.email_verified == true;
+    }
+
+    function hasGoogleIdentityEmail() {
+      return request.auth != null
+        && 'firebase' in request.auth.token
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
+        && 'identities' in request.auth.token.firebase
+        && 'email' in request.auth.token.firebase.identities
+        && request.auth.token.firebase.identities.email is list
+        && request.auth.token.firebase.identities.email.size() > 0
+        && request.auth.token.firebase.identities.email[0] is string
+        && request.auth.token.firebase.identities.email[0].size() > 0;
+    }
+
+    function isVerifiedUser() {
+      return hasDirectVerifiedEmail() || hasGoogleIdentityEmail();
+    }
+
+    function userEmail() {
+      return hasDirectVerifiedEmail()
+        ? request.auth.token.email.lower()
+        : request.auth.token.firebase.identities.email[0].lower();
+    }
+
+    function isVerifiedFamily() {
+      return isVerifiedUser()
         && (
-          request.auth.token.email.lower() == 'tmerzak@gmail.com' ||
-          request.auth.token.email.lower() == 'badroumc@gmail.com' ||
-          request.auth.token.email.lower() == 'tigrine156@gmail.com' ||
-          request.auth.token.email.lower() == 'tigrinemelissalyna@gmail.com'
+          userEmail() == 'tmerzak@gmail.com' ||
+          userEmail() == 'badroumc@gmail.com' ||
+          userEmail() == 'tigrine156@gmail.com' ||
+          userEmail() == 'tigrinemelissalyna@gmail.com'
         );
     }
 
@@ -30,8 +59,7 @@ service firebase.storage {
     // External journalist self-managed portrait upload scoped to their UID
     match /journalist-avatars/{uid}/{fileName} {
       allow read: if true;
-      allow write: if request.auth != null
-        && request.auth.token.email_verified == true
+      allow write: if isVerifiedUser()
         && request.auth.uid == uid
         && isValidImageUpload();
     }

@@ -16,6 +16,8 @@ import { FOUNDER_EMAIL } from '../../utils/permissions';
 export const AdminAuthGate: React.FC = () => {
   const {
     user,
+    userEmail,
+    emailVerified,
     authReady,
     isFamilyMember,
     effectiveSettings,
@@ -89,7 +91,14 @@ export const AdminAuthGate: React.FC = () => {
     try {
       await signInWithGoogle();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connexion Google interrompue.');
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('unauthorized-domain')) {
+        setError(
+          `Domaine non autorisé dans Firebase (${window.location.hostname}). Ajoutez "${window.location.hostname}" dans Firebase Console → Authentication → Settings → Authorized domains.`
+        );
+      } else {
+        setError(msg || 'Connexion Google interrompue.');
+      }
     } finally {
       setBusy(false);
     }
@@ -116,10 +125,16 @@ export const AdminAuthGate: React.FC = () => {
           </div>
 
           <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
-            Le compte <strong>{user.email}</strong>{' '}
-            {!user.emailVerified
-              ? 'n’a pas encore validé son adresse e-mail.'
-              : 'ne figure pas sur la liste familiale autorisée pour le panneau /admin.'}
+            {userEmail ? (
+              <>
+                Le compte <strong>{userEmail}</strong>{' '}
+                {!emailVerified
+                  ? 'n’a pas encore validé son adresse e-mail.'
+                  : 'ne figure pas sur la liste familiale autorisée pour le panneau /admin.'}
+              </>
+            ) : (
+              'Aucune adresse e-mail vérifiée n’a été transmise par Firebase pour cette session. Vérifiez que l’option « Link accounts that use the same email » est activée dans Firebase Console → Authentication → Settings, puis reconnectez-vous.'
+            )}
           </p>
 
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">

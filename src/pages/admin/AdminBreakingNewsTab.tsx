@@ -103,11 +103,29 @@ export const AdminBreakingNewsTab: React.FC = () => {
 
   const handleReorder = async (item: BreakingNewsItem, delta: number) => {
     setBusy(true);
+    setErrorMsg('');
     try {
       await saveBreakingNews(
         { ...item, sortOrder: Math.max(0, item.sortOrder + delta) },
         false
       );
+      setStatusMsg('Ordre mis à jour dans Firebase.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Erreur lors du réordonnancement.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteAlert = async (id: string) => {
+    setBusy(true);
+    setErrorMsg('');
+    setStatusMsg('');
+    try {
+      await deleteBreakingNews(id);
+      setStatusMsg('Alerte supprimée de Firebase.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Erreur lors de la suppression.');
     } finally {
       setBusy(false);
     }
@@ -159,6 +177,7 @@ export const AdminBreakingNewsTab: React.FC = () => {
       {/* Create / Edit Alert Form */}
       <form
         onSubmit={handleSaveAlert}
+        noValidate
         className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4"
       >
         <h2 className="text-sm font-bold text-slate-950 dark:text-white">
@@ -353,9 +372,10 @@ export const AdminBreakingNewsTab: React.FC = () => {
               )}
               <button
                 type="button"
+                disabled={busy}
                 aria-label="Supprimer l’alerte"
-                onClick={() => void deleteBreakingNews(item.id)}
-                className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                onClick={() => void handleDeleteAlert(item.id)}
+                className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50"
               >
                 <Trash2 className="w-4 h-4" />
               </button>

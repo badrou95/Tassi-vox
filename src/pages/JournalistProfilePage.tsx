@@ -16,6 +16,7 @@ export const JournalistProfilePage: React.FC = () => {
     journalists,
     publishedArticles,
     user,
+    emailVerified,
     updateOwnJournalistProfile,
   } = useApp();
   const copy = getCopy(language);
@@ -23,7 +24,7 @@ export const JournalistProfilePage: React.FC = () => {
 
   const journalist = journalists.find((j) => j.id === id);
   const canSelfEdit = Boolean(
-    user && user.emailVerified && journalist && journalist.ownerUid === user.uid
+    user && emailVerified && journalist && journalist.ownerUid === user.uid
   );
 
   const [editing, setEditing] = useState(false);
