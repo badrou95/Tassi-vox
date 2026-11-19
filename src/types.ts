@@ -32,6 +32,8 @@ export type BreakingStatus = 'active' | 'paused' | 'archived';
 
 export type SubmissionStatus = 'received' | 'in_review' | 'converted_to_draft' | 'declined';
 
+export type JournalistAccountStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
+
 export interface CategoryConfig {
   id: string;
   nameFr: string;
@@ -151,6 +153,23 @@ export interface Journalist {
   updatedAt?: unknown;
 }
 
+export interface JournalistAccount {
+  id: string;
+  uid: string;
+  email: string;
+  fullName: string;
+  specialty: string;
+  phoneOrContact: string;
+  bio: string;
+  portfolioUrl: string;
+  status: JournalistAccountStatus;
+  reviewedByEmail: string;
+  reviewNotes: string;
+  linkedJournalistId: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 export interface Submission {
   id: string;
   authorUid: string;
@@ -164,6 +183,9 @@ export interface Submission {
   summaryAr: string;
   contentFr: string;
   contentAr: string;
+  coverImageUrl: string;
+  coverImageCaption: string;
+  coverImageSizeBytes: number;
   notesForEditors: string;
   status: SubmissionStatus;
   linkedArticleId: string;

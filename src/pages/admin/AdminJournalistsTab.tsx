@@ -1,7 +1,19 @@
 import React, { useState } from 'react';
-import { Edit3, Eye, EyeOff, Plus, Trash2, Upload } from 'lucide-react';
+import {
+  CheckCircle2,
+  Clock,
+  Edit3,
+  Eye,
+  EyeOff,
+  Plus,
+  ShieldAlert,
+  Trash2,
+  Upload,
+  UserCheck,
+  XCircle,
+} from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import type { Journalist } from '../../types';
+import type { Journalist, JournalistAccount, JournalistAccountStatus } from '../../types';
 import { EditorialImage } from '../../components/EditorialImage';
 import { uploadMediaFile } from '../../lib/firebase';
 
@@ -39,11 +51,14 @@ function formatErrorMessage(error: unknown, fallback: string): string {
 export const AdminJournalistsTab: React.FC = () => {
   const {
     journalists,
+    journalistAccounts,
     effectiveSettings,
     isFounder,
     currentPermissions,
     saveJournalist,
     deleteJournalist,
+    reviewJournalistAccount,
+    deleteJournalistAccount,
   } = useApp();
 
   const [editing, setEditing] = useState<Journalist | null>(null);
@@ -51,11 +66,56 @@ export const AdminJournalistsTab: React.FC = () => {
   const [areasFrInput, setAreasFrInput] = useState('');
   const [areasArInput, setAreasArInput] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [accountNotes, setAccountNotes] = useState<Record<string, string>>({});
+  const [createProfileOnApprove, setCreateProfileOnApprove] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
   const canDeleteJournalist = isFounder || currentPermissions.manage_journalists;
+  const pendingAccountsCount = journalistAccounts.filter((a) => a.status === 'pending').length;
+
+  const handleReviewAccount = async (
+    account: JournalistAccount,
+    nextStatus: JournalistAccountStatus
+  ) => {
+    setBusy(true);
+    setErr('');
+    setMsg('');
+    try {
+      await reviewJournalistAccount(
+        account,
+        nextStatus,
+        accountNotes[account.uid] || '',
+        nextStatus === 'approved' ? createProfileOnApprove : false
+      );
+      setMsg(
+        nextStatus === 'approved'
+          ? `Compte journaliste de ${account.fullName} approuvé : il peut désormais soumettre des articles avec photo (2 Mo max).`
+          : nextStatus === 'rejected'
+            ? `Demande de ${account.fullName} refusée.`
+            : `Compte de ${account.fullName} suspendu.`
+      );
+    } catch (revErr) {
+      setErr(formatErrorMessage(revErr, 'Action impossible sur ce compte journaliste.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteAccount = async (account: JournalistAccount) => {
+    setBusy(true);
+    setErr('');
+    setMsg('');
+    try {
+      await deleteJournalistAccount(account);
+      setMsg(`Compte journaliste externe de ${account.fullName} supprimé.`);
+    } catch (delErr) {
+      setErr(formatErrorMessage(delErr, 'Suppression impossible.'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const openEditor = (j: Journalist | null) => {
     setErr('');
@@ -195,6 +255,146 @@ export const AdminJournalistsTab: React.FC = () => {
         <div role="status" className="p-3.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-sm text-emerald-800 dark:text-emerald-300">
           {msg}
         </div>
+      )}
+
+      {/* Direction Approval Queue for External Journalist Accounts */}
+      {!editing && (
+        <section className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-5 h-5" style={{ color: effectiveSettings.primaryColor }} />
+                <h2 className="font-editorial text-lg font-bold text-slate-950 dark:text-white">
+                  Comptes journalistes externes (Approbation Direction)
+                </h2>
+                {pendingAccountsCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200">
+                    {pendingAccountsCount} en attente
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Les journalistes créent leur compte via <code>/fr/soumettre</code>. Une fois approuvé
+                ici, ils peuvent uniquement soumettre leurs articles avec photo obligatoire (JPG/PNG/WebP · 2 Mo max), sans aucun accès à /admin.
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createProfileOnApprove}
+                onChange={(e) => setCreateProfileOnApprove(e.target.checked)}
+                className="w-4 h-4 rounded"
+              />
+              <span>Créer aussi la fiche publique « Notre équipe » à l’approbation</span>
+            </label>
+          </div>
+
+          {journalistAccounts.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400 py-3">
+              Aucune demande de compte journaliste pour le moment. Les candidats peuvent s’inscrire sur{' '}
+              <strong>/fr/soumettre</strong>.
+            </p>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {journalistAccounts.map((acc) => (
+                <div key={acc.uid} className="py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-sm text-slate-950 dark:text-white">
+                        {acc.fullName}
+                      </span>
+                      <span className="text-xs font-mono text-slate-500">{acc.email}</span>
+                      {acc.status === 'pending' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                          <Clock className="w-3 h-3" /> En attente
+                        </span>
+                      )}
+                      {acc.status === 'approved' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" /> Approuvé
+                        </span>
+                      )}
+                      {(acc.status === 'rejected' || acc.status === 'suspended') && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300">
+                          <ShieldAlert className="w-3 h-3" />{' '}
+                          {acc.status === 'suspended' ? 'Suspendu' : 'Refusé'}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                      {[acc.specialty, acc.phoneOrContact, acc.portfolioUrl].filter(Boolean).join(' · ') ||
+                        'Aucune spécialité précisée'}
+                    </p>
+                    {acc.bio && (
+                      <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">{acc.bio}</p>
+                    )}
+                    {acc.reviewedByEmail && (
+                      <p className="text-[11px] text-slate-400">
+                        Décision par {acc.reviewedByEmail}
+                        {acc.reviewNotes ? ` — ${acc.reviewNotes}` : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+                    <input
+                      type="text"
+                      value={accountNotes[acc.uid] ?? acc.reviewNotes ?? ''}
+                      onChange={(e) =>
+                        setAccountNotes((prev) => ({ ...prev, [acc.uid]: e.target.value }))
+                      }
+                      placeholder="Note / motif (optionnel)"
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs w-full sm:w-44"
+                    />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {acc.status !== 'approved' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleReviewAccount(acc, 'approved')}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Approuver</span>
+                        </button>
+                      )}
+                      {acc.status === 'pending' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleReviewAccount(acc, 'rejected')}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 dark:border-red-900 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Refuser</span>
+                        </button>
+                      )}
+                      {acc.status === 'approved' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleReviewAccount(acc, 'suspended')}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 disabled:opacity-60"
+                        >
+                          <span>Suspendre</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleDeleteAccount(acc)}
+                        aria-label={`Supprimer compte ${acc.fullName}`}
+                        className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
 
       {editing ? (

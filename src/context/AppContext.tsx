@@ -25,6 +25,7 @@ import {
 import {
   auth,
   db,
+  deleteStorageFileByUrl,
   googleProvider,
   handleFirestoreError,
   OperationType,
@@ -45,12 +46,15 @@ import type {
   BreakingNewsItem,
   FamilyRole,
   Journalist,
+  JournalistAccount,
+  JournalistAccountStatus,
   Language,
   PermissionsMap,
   SiteSettings,
   Submission,
 } from '../types';
 import {
+  MAX_SUBMISSION_IMAGE_BYTES,
   canApproveOrPublish,
   canModifyAdminAccount,
   canUserPerform,
@@ -75,6 +79,7 @@ interface AppContextValue {
   user: User | null;
   userEmail: string;
   emailVerified: boolean;
+  jwtEmailMissing: boolean;
   authReady: boolean;
   isFamilyMember: boolean;
   isFounder: boolean;
@@ -97,6 +102,8 @@ interface AppContextValue {
   activeBreakingNews: BreakingNewsItem[];
   journalists: Journalist[];
   visibleJournalists: Journalist[];
+  journalistAccounts: JournalistAccount[];
+  myJournalistAccount: JournalistAccount | null;
   submissions: Submission[];
   adminUsers: AdminUser[];
   auditLogs: AuditLog[];
@@ -114,6 +121,7 @@ interface AppContextValue {
     reviewNotes?: string
   ) => Promise<void>;
   deleteArticle: (article: Article) => Promise<void>;
+  purgeArchivedArticles: () => Promise<number>;
   saveJournalist: (journalist: Journalist, isNew: boolean) => Promise<void>;
   updateOwnJournalistProfile: (
     journalist: Journalist,
@@ -134,6 +142,20 @@ interface AppContextValue {
     >
   ) => Promise<void>;
   deleteJournalist: (id: string) => Promise<void>;
+  requestJournalistAccount: (payload: {
+    fullName: string;
+    specialty: string;
+    phoneOrContact: string;
+    bio: string;
+    portfolioUrl: string;
+  }) => Promise<void>;
+  reviewJournalistAccount: (
+    account: JournalistAccount,
+    status: JournalistAccountStatus,
+    reviewNotes?: string,
+    alsoCreatePublicProfile?: boolean
+  ) => Promise<void>;
+  deleteJournalistAccount: (account: JournalistAccount) => Promise<void>;
   createSubmission: (
     payload: Omit<Submission, 'id' | 'authorUid' | 'authorEmail' | 'status' | 'linkedArticleId' | 'createdAt' | 'updatedAt'>
   ) => Promise<void>;
@@ -190,6 +212,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [user, setUser] = useState<User | null>(null);
+  const [jwtEmailMissing, setJwtEmailMissing] = useState(false);
   const [authReady, setAuthReady] = useState(false);
 
   const [firestoreSettings, setFirestoreSettings] = useState<SiteSettings | null>(null);
@@ -197,6 +220,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [firestoreArticles, setFirestoreArticles] = useState<Article[] | null>(null);
   const [firestoreBreaking, setFirestoreBreaking] = useState<BreakingNewsItem[] | null>(null);
   const [firestoreJournalists, setFirestoreJournalists] = useState<Journalist[] | null>(null);
+  const [firestoreJournalistAccounts, setFirestoreJournalistAccounts] = useState<JournalistAccount[]>([]);
+  const [myJournalistAccount, setMyJournalistAccount] = useState<JournalistAccount | null>(null);
   const [firestoreSubmissions, setFirestoreSubmissions] = useState<Submission[]>([]);
   const [firestoreAdminUsers, setFirestoreAdminUsers] = useState<AdminUser[]>([]);
   const [firestoreAuditLogs, setFirestoreAuditLogs] = useState<AuditLog[]>([]);
@@ -229,11 +254,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     root.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
 
-  // Auth listener
+  // Auth listener + JWT email claim verification
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setAuthReady(true);
+      if (!firebaseUser) {
+        setJwtEmailMissing(false);
+        return;
+      }
+      void firebaseUser
+        .getIdTokenResult()
+        .then((res) => {
+          const claims = res.claims as {
+            email?: unknown;
+            email_verified?: unknown;
+            firebase?: {
+              sign_in_provider?: unknown;
+              identities?: { email?: unknown };
+            };
+          };
+          const hasDirect =
+            typeof claims.email === 'string' &&
+            claims.email.length > 0 &&
+            claims.email_verified === true;
+          const hasGoogleId =
+            claims.firebase?.sign_in_provider === 'google.com' &&
+            Array.isArray(claims.firebase?.identities?.email) &&
+            claims.firebase.identities.email.length > 0;
+          setJwtEmailMissing(!(hasDirect || hasGoogleId));
+        })
+        .catch(() => {
+          setJwtEmailMissing(false);
+        });
     });
     return () => unsub();
   }, []);
@@ -404,6 +457,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     let unsubLogs: (() => void) | undefined;
+    let unsubAccounts: (() => void) | undefined;
+
     if (isFamilyMember) {
       unsubLogs = onSnapshot(
         collection(db, 'auditLogs'),
@@ -426,13 +481,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.warn('auditLogs listener error:', err.message);
         }
       );
+
+      unsubAccounts = onSnapshot(
+        collection(db, 'journalistAccounts'),
+        (snap) => {
+          const list = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<JournalistAccount, 'id'>),
+          }));
+          list.sort((a, b) => {
+            if (a.status === 'pending' && b.status !== 'pending') return -1;
+            if (a.status !== 'pending' && b.status === 'pending') return 1;
+            return a.fullName.localeCompare(b.fullName);
+          });
+          setFirestoreJournalistAccounts(list);
+          setMyJournalistAccount(list.find((acc) => acc.uid === user.uid) || null);
+        },
+        (err) => {
+          console.warn('journalistAccounts list error:', err.message);
+        }
+      );
     } else {
       setFirestoreAuditLogs([]);
+      setFirestoreJournalistAccounts([]);
+      unsubAccounts = onSnapshot(
+        doc(db, 'journalistAccounts', user.uid),
+        (snap) => {
+          if (snap.exists()) {
+            setMyJournalistAccount({
+              id: snap.id,
+              ...(snap.data() as Omit<JournalistAccount, 'id'>),
+            });
+          } else {
+            setMyJournalistAccount(null);
+          }
+        },
+        () => {
+          setMyJournalistAccount(null);
+        }
+      );
     }
 
     return () => {
       unsubSubs();
       if (unsubLogs) unsubLogs();
+      if (unsubAccounts) unsubAccounts();
     };
   }, [authReady, user, emailVerified, isFamilyMember]);
 
@@ -879,7 +972,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [user, articles, userEmail, emailVerified, adminUsers, isFounder, writeAuditLog]
   );
 
-  // Founder-exclusive approval/publish/unpublish workflow action
+  // Workflow transition (Founder exclusive publish/approve; authorized admins may archive or restore archived to draft)
   const transitionArticleStatus = useCallback(
     async (article: Article, nextStatus: ArticleStatus, reviewNotes = '') => {
       if (!user) throw new Error('Authentification requise.');
@@ -898,7 +991,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const nowIso = new Date().toISOString();
       const docRef = doc(db, 'articles', article.id);
       try {
-        if (isFounder) {
+        const existsInDb = (await getDoc(docRef)).exists();
+        if (!existsInDb) {
+          // Starter catalog article not yet stored in Firestore:
+          // materialize starter articles so archiving/updating persists cleanly.
+          const hasLiveArticles = Boolean(firestoreArticles && firestoreArticles.length > 0);
+          if (!hasLiveArticles && !firestoreSettings && isFounder) {
+            const batch = writeBatch(db);
+            for (const a of DEFAULT_ARTICLES) {
+              const effectiveStatus = a.id === article.id ? nextStatus : a.status;
+              batch.set(doc(db, 'articles', a.id), {
+                slug: a.slug,
+                categoryId: a.categoryId,
+                authorId: a.authorId,
+                status: effectiveStatus,
+                isFeatured: a.isFeatured,
+                fr: a.fr,
+                ar: a.ar,
+                reviewNotes: a.id === article.id ? clampString(reviewNotes || a.reviewNotes, 2000) : a.reviewNotes,
+                createdByUid: user.uid,
+                createdByEmail: userEmail,
+                approvedByEmail: effectiveStatus === 'published' || effectiveStatus === 'approved' ? userEmail : a.approvedByEmail,
+                approvedAt: effectiveStatus === 'published' || effectiveStatus === 'approved' ? a.approvedAt || nowIso : a.approvedAt,
+                publishedAt: effectiveStatus === 'published' ? a.publishedAt || nowIso : a.publishedAt,
+                viewsCount: a.viewsCount,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            }
+            if (canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
+              batch.set(doc(db, 'siteSettings', 'main'), {
+                ...DEFAULT_SITE_SETTINGS,
+                socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
+                updatedByEmail: userEmail,
+                updatedAt: serverTimestamp(),
+              });
+            }
+            await batch.commit();
+          } else {
+            // Non-founder archiving an unseeded starter article: create as draft first if needed, or save directly if allowed
+            if (!isFounder && nextStatus === 'archived') {
+              await setDoc(docRef, {
+                slug: clampString(article.slug, 120),
+                categoryId: clampString(article.categoryId, 64),
+                authorId: clampString(article.authorId, 128),
+                status: 'draft',
+                isFeatured: Boolean(article.isFeatured),
+                fr: article.fr,
+                ar: article.ar,
+                reviewNotes: '',
+                createdByUid: user.uid,
+                createdByEmail: userEmail,
+                approvedByEmail: '',
+                approvedAt: '',
+                publishedAt: '',
+                viewsCount: article.viewsCount || 0,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              await updateDoc(docRef, { status: 'archived', updatedAt: serverTimestamp() });
+            } else {
+              await setDoc(docRef, {
+                slug: clampString(article.slug, 120),
+                categoryId: clampString(article.categoryId, 64),
+                authorId: clampString(article.authorId, 128),
+                status: nextStatus,
+                isFeatured: Boolean(article.isFeatured),
+                fr: article.fr,
+                ar: article.ar,
+                reviewNotes: isFounder ? clampString(reviewNotes || article.reviewNotes, 2000) : '',
+                createdByUid: user.uid,
+                createdByEmail: userEmail,
+                approvedByEmail: isFounder && (nextStatus === 'approved' || nextStatus === 'published') ? userEmail : '',
+                approvedAt: isFounder && (nextStatus === 'approved' || nextStatus === 'published') ? nowIso : '',
+                publishedAt: isFounder && nextStatus === 'published' ? nowIso : '',
+                viewsCount: article.viewsCount || 0,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+        } else if (isFounder) {
           const patch: Record<string, unknown> = {
             status: nextStatus,
             reviewNotes: clampString(reviewNotes || article.reviewNotes, 2000),
@@ -929,32 +1102,121 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handleFirestoreError(err, OperationType.UPDATE, `articles/${article.id}`);
       }
     },
-    [user, userEmail, emailVerified, adminUsers, isFounder, writeAuditLog]
+    [user, userEmail, emailVerified, adminUsers, isFounder, firestoreArticles, firestoreSettings, writeAuditLog]
   );
 
   const deleteArticle = useCallback(
     async (article: Article) => {
       if (!user) throw new Error('Authentification requise.');
-      if (article.status === 'published' && !isFounder) {
-        throw new Error('Seul le fondateur peut supprimer un article publié.');
-      }
       if (!isFounder && !canUserPerform(userEmail, emailVerified, 'delete_articles', adminUsers)) {
         throw new Error('Permission "Supprimer des articles" requise.');
       }
       try {
-        await deleteDoc(doc(db, 'articles', article.id));
+        const hasLiveArticles = Boolean(firestoreArticles && firestoreArticles.length > 0);
+        if (!hasLiveArticles && !firestoreSettings) {
+          // Starter catalog not yet materialized in Firestore: persist remaining starter articles + siteSettings
+          const batch = writeBatch(db);
+          const remaining = DEFAULT_ARTICLES.filter((a) => a.id !== article.id);
+          for (const a of remaining) {
+            const safeStatus: ArticleStatus = isFounder
+              ? a.status
+              : a.status === 'published' || a.status === 'approved'
+                ? 'pending_review'
+                : a.status;
+            batch.set(doc(db, 'articles', a.id), {
+              slug: a.slug,
+              categoryId: a.categoryId,
+              authorId: a.authorId,
+              status: safeStatus,
+              isFeatured: a.isFeatured,
+              fr: a.fr,
+              ar: a.ar,
+              reviewNotes: isFounder ? a.reviewNotes : '',
+              createdByUid: user.uid,
+              createdByEmail: userEmail,
+              approvedByEmail: isFounder && safeStatus === 'published' ? userEmail : '',
+              approvedAt: isFounder && safeStatus === 'published' ? a.approvedAt : '',
+              publishedAt: isFounder && safeStatus === 'published' ? a.publishedAt : '',
+              viewsCount: a.viewsCount,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          if (canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
+            batch.set(doc(db, 'siteSettings', 'main'), {
+              ...DEFAULT_SITE_SETTINGS,
+              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
+              updatedByEmail: userEmail,
+              updatedAt: serverTimestamp(),
+            });
+          }
+          await batch.commit();
+        } else {
+          await deleteDoc(doc(db, 'articles', article.id));
+          if (
+            firestoreArticles &&
+            firestoreArticles.length <= 1 &&
+            !firestoreSettings &&
+            canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)
+          ) {
+            await setDoc(doc(db, 'siteSettings', 'main'), {
+              ...DEFAULT_SITE_SETTINGS,
+              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
+              updatedByEmail: userEmail,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+
+        // Clean up Firebase Storage cover images to genuinely free storage space
+        const urlsToFree = Array.from(
+          new Set([article.fr.coverImageUrl, article.ar.coverImageUrl].filter(Boolean))
+        );
+        await Promise.all(urlsToFree.map((u) => deleteStorageFileByUrl(u)));
+
         await writeAuditLog(
           'DELETE_ARTICLE',
           'articles',
           article.id,
-          `Suppression de l’article "${clampString(article.fr.title || article.ar.title, 100)}".`
+          `Suppression définitive de l’article "${clampString(article.fr.title || article.ar.title, 100)}" (espace libéré).`
         );
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `articles/${article.id}`);
       }
     },
-    [user, isFounder, userEmail, emailVerified, adminUsers, writeAuditLog]
+    [user, isFounder, userEmail, emailVerified, adminUsers, firestoreArticles, firestoreSettings, writeAuditLog]
   );
+
+  // Bulk-purge all archived articles + their Firebase Storage images to free space
+  const purgeArchivedArticles = useCallback(async (): Promise<number> => {
+    if (!user) throw new Error('Authentification requise.');
+    if (!isFounder && !canUserPerform(userEmail, emailVerified, 'delete_articles', adminUsers)) {
+      throw new Error('Permission "Supprimer des articles" requise pour vider les archives.');
+    }
+    const archived = articles.filter((a) => a.status === 'archived');
+    if (archived.length === 0) return 0;
+
+    try {
+      const batch = writeBatch(db);
+      const urlsToFree = new Set<string>();
+      for (const a of archived) {
+        batch.delete(doc(db, 'articles', a.id));
+        if (a.fr.coverImageUrl) urlsToFree.add(a.fr.coverImageUrl);
+        if (a.ar.coverImageUrl) urlsToFree.add(a.ar.coverImageUrl);
+      }
+      await batch.commit();
+      await Promise.all(Array.from(urlsToFree).map((u) => deleteStorageFileByUrl(u)));
+      await writeAuditLog(
+        'PURGE_ARCHIVED_ARTICLES',
+        'articles',
+        'archived_batch',
+        `Purge de ${archived.length} article(s) archivé(s) et nettoyage des médias associés pour libérer de l’espace.`
+      );
+      return archived.length;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'articles/archived');
+    }
+  }, [user, isFounder, userEmail, emailVerified, adminUsers, articles, writeAuditLog]);
 
   // Save Journalist Profile (Family admin)
   const saveJournalist = useCallback(
@@ -1119,7 +1381,135 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [user, isFounder, userEmail, emailVerified, adminUsers, firestoreJournalists, firestoreSettings, writeAuditLog]
   );
 
-  // External journalist secure submission
+  // External journalist account registration (strictly starts as 'pending', awaits Direction approval)
+  const requestJournalistAccount = useCallback(
+    async (payload: {
+      fullName: string;
+      specialty: string;
+      phoneOrContact: string;
+      bio: string;
+      portfolioUrl: string;
+    }) => {
+      if (!user || !emailVerified || !userEmail) {
+        throw new Error('Connexion avec adresse e-mail vérifiée requise.');
+      }
+      const fullName = clampString(payload.fullName, 120);
+      if (fullName.length < 2) {
+        throw new Error('Veuillez renseigner votre nom complet (2 caractères minimum).');
+      }
+      const docRef = doc(db, 'journalistAccounts', user.uid);
+      try {
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          await updateDoc(docRef, {
+            fullName,
+            specialty: clampString(payload.specialty, 160),
+            phoneOrContact: clampString(payload.phoneOrContact, 80),
+            bio: clampString(payload.bio, 600),
+            portfolioUrl: clampString(payload.portfolioUrl, 300),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(docRef, {
+            uid: user.uid,
+            email: userEmail,
+            fullName,
+            specialty: clampString(payload.specialty, 160),
+            phoneOrContact: clampString(payload.phoneOrContact, 80),
+            bio: clampString(payload.bio, 600),
+            portfolioUrl: clampString(payload.portfolioUrl, 300),
+            status: 'pending',
+            reviewedByEmail: '',
+            reviewNotes: '',
+            linkedJournalistId: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `journalistAccounts/${user.uid}`);
+      }
+    },
+    [user, emailVerified, userEmail]
+  );
+
+  // Direction review of journalist account (approve / reject / suspend)
+  const reviewJournalistAccount = useCallback(
+    async (
+      account: JournalistAccount,
+      status: JournalistAccountStatus,
+      reviewNotes = '',
+      alsoCreatePublicProfile = false
+    ) => {
+      if (!user || (!isFounder && !canUserPerform(userEmail, emailVerified, 'manage_journalists', adminUsers))) {
+        throw new Error('Permission "Gérer les profils des journalistes" requise.');
+      }
+      try {
+        let linkedId = account.linkedJournalistId || '';
+        if (status === 'approved' && alsoCreatePublicProfile && !linkedId) {
+          linkedId = `jour_${Date.now()}`;
+          await setDoc(doc(db, 'journalists', linkedId), {
+            fullNameFr: clampString(account.fullName, 120),
+            fullNameAr: clampString(account.fullName, 120),
+            roleFr: clampString(account.specialty || 'Journaliste contributeur', 120),
+            roleAr: clampString(account.specialty || 'صحفي مساهم', 120),
+            bioFr: clampString(account.bio, 600),
+            bioAr: clampString(account.bio, 600),
+            careerFr: '',
+            careerAr: '',
+            coverageAreasFr: account.specialty ? [clampString(account.specialty, 60)] : [],
+            coverageAreasAr: [],
+            photoUrl: '',
+            socials: account.portfolioUrl ? sanitizeSocials({ website: account.portfolioUrl }) : {},
+            ownerUid: account.uid,
+            isVisible: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        await updateDoc(doc(db, 'journalistAccounts', account.uid), {
+          status,
+          reviewedByEmail: userEmail,
+          reviewNotes: clampString(reviewNotes, 500),
+          linkedJournalistId: linkedId,
+          updatedAt: serverTimestamp(),
+        });
+
+        await writeAuditLog(
+          `JOURNALIST_ACCOUNT_${status.toUpperCase()}`,
+          'journalistAccounts',
+          account.uid,
+          `Compte journaliste ${account.fullName} (${account.email}) → ${status}${reviewNotes ? ` : ${clampString(reviewNotes, 140)}` : ''}`
+        );
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `journalistAccounts/${account.uid}`);
+      }
+    },
+    [user, isFounder, userEmail, emailVerified, adminUsers, writeAuditLog]
+  );
+
+  const deleteJournalistAccount = useCallback(
+    async (account: JournalistAccount) => {
+      if (!user || (!isFounder && !canUserPerform(userEmail, emailVerified, 'manage_journalists', adminUsers))) {
+        throw new Error('Permission "Gérer les profils des journalistes" requise.');
+      }
+      try {
+        await deleteDoc(doc(db, 'journalistAccounts', account.uid));
+        await writeAuditLog(
+          'DELETE_JOURNALIST_ACCOUNT',
+          'journalistAccounts',
+          account.uid,
+          `Suppression du compte journaliste externe ${account.fullName} (${account.email}).`
+        );
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `journalistAccounts/${account.uid}`);
+      }
+    },
+    [user, isFounder, userEmail, emailVerified, adminUsers, writeAuditLog]
+  );
+
+  // External journalist secure submission (APPROVED accounts only + mandatory <= 2MB photo)
   const createSubmission = useCallback(
     async (
       payload: Omit<
@@ -1129,6 +1519,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ) => {
       if (!user || !emailVerified) {
         throw new Error('Connexion avec adresse e-mail vérifiée requise pour soumettre un article.');
+      }
+      if (!isFamilyMember && myJournalistAccount?.status !== 'approved') {
+        throw new Error(
+          'Votre compte journaliste doit d’abord être approuvé par la Direction avant de pouvoir soumettre un article.'
+        );
+      }
+      const coverUrl = clampString(payload.coverImageUrl, 500);
+      const coverBytes = Number(payload.coverImageSizeBytes) || 0;
+      if (!coverUrl.startsWith('https://') || coverBytes <= 0 || coverBytes > MAX_SUBMISSION_IMAGE_BYTES) {
+        throw new Error(
+          'Une photo d’article téléversée (JPG, PNG ou WebP, 2 Mo maximum) est obligatoire pour soumettre un article.'
+        );
       }
       const id = `sub_${Date.now()}`;
       try {
@@ -1144,6 +1546,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           summaryAr: clampString(payload.summaryAr, 600),
           contentFr: clampString(payload.contentFr, 25000),
           contentAr: clampString(payload.contentAr, 25000),
+          coverImageUrl: coverUrl,
+          coverImageCaption: clampString(payload.coverImageCaption, 240),
+          coverImageSizeBytes: coverBytes,
           notesForEditors: clampString(payload.notesForEditors, 1000),
           status: 'received',
           linkedArticleId: '',
@@ -1154,7 +1559,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handleFirestoreError(err, OperationType.CREATE, `submissions/${id}`);
       }
     },
-    [user, emailVerified, userEmail]
+    [user, emailVerified, userEmail, isFamilyMember, myJournalistAccount]
   );
 
   const updateSubmissionStatus = useCallback(
@@ -1284,6 +1689,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     user,
     userEmail,
     emailVerified,
+    jwtEmailMissing,
     authReady,
     isFamilyMember,
     isFounder,
@@ -1304,6 +1710,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     activeBreakingNews,
     journalists,
     visibleJournalists,
+    journalistAccounts: firestoreJournalistAccounts,
+    myJournalistAccount,
     submissions: firestoreSubmissions,
     adminUsers,
     auditLogs: firestoreAuditLogs,
@@ -1315,9 +1723,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveArticle,
     transitionArticleStatus,
     deleteArticle,
+    purgeArchivedArticles,
     saveJournalist,
     updateOwnJournalistProfile,
     deleteJournalist,
+    requestJournalistAccount,
+    reviewJournalistAccount,
+    deleteJournalistAccount,
     createSubmission,
     updateSubmissionStatus,
     saveAdminUser,

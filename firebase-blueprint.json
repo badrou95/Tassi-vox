@@ -197,6 +197,9 @@
         "summaryAr": { "type": "string", "maxLength": 600 },
         "contentFr": { "type": "string", "maxLength": 25000 },
         "contentAr": { "type": "string", "maxLength": 25000 },
+        "coverImageUrl": { "type": "string", "minLength": 10, "maxLength": 500 },
+        "coverImageCaption": { "type": "string", "maxLength": 240 },
+        "coverImageSizeBytes": { "type": "number", "minimum": 1, "maximum": 2097152 },
         "notesForEditors": { "type": "string", "maxLength": 1000 },
         "status": { "type": "string", "enum": ["received", "in_review", "converted_to_draft", "declined"] },
         "linkedArticleId": { "type": "string", "maxLength": 128 },
@@ -215,9 +218,47 @@
         "summaryAr",
         "contentFr",
         "contentAr",
+        "coverImageUrl",
+        "coverImageCaption",
+        "coverImageSizeBytes",
         "notesForEditors",
         "status",
         "linkedArticleId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "JournalistAccount": {
+      "title": "JournalistAccount",
+      "description": "External journalist registration account requiring explicit Direction approval before article submission.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "specialty": { "type": "string", "maxLength": 160 },
+        "phoneOrContact": { "type": "string", "maxLength": 80 },
+        "bio": { "type": "string", "maxLength": 600 },
+        "portfolioUrl": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "suspended"] },
+        "reviewedByEmail": { "type": "string", "maxLength": 160 },
+        "reviewNotes": { "type": "string", "maxLength": 500 },
+        "linkedJournalistId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "email",
+        "fullName",
+        "specialty",
+        "phoneOrContact",
+        "bio",
+        "portfolioUrl",
+        "status",
+        "reviewedByEmail",
+        "reviewNotes",
+        "linkedJournalistId",
         "createdAt",
         "updatedAt"
       ]
@@ -294,9 +335,13 @@
       "schema": { "$ref": "#/entities/Journalist" },
       "description": "Public journalist directory profiles (zero private PII)."
     },
+    "/journalistAccounts/{accountUid}": {
+      "schema": { "$ref": "#/entities/JournalistAccount" },
+      "description": "External journalist registration accounts awaiting or holding Direction approval."
+    },
     "/submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/Submission" },
-      "description": "External journalist article submissions inbox."
+      "description": "External journalist article submissions inbox (approved accounts only, mandatory photo <= 2MB)."
     },
     "/adminUsers/{adminId}": {
       "schema": { "$ref": "#/entities/AdminUser" },

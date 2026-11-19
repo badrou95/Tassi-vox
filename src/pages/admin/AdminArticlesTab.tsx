@@ -4,8 +4,10 @@ import {
   CheckCircle2,
   Edit3,
   Globe,
+  HardDrive,
   Lock,
   Plus,
+  RotateCcw,
   Send,
   ShieldCheck,
   Trash2,
@@ -18,6 +20,19 @@ import type { Article, ArticleStatus } from '../../types';
 import { slugifyTitle } from '../../utils/routing';
 import { uploadMediaFile } from '../../lib/firebase';
 import { FOUNDER_EMAIL } from '../../utils/permissions';
+
+function formatErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  try {
+    const parsed = JSON.parse(error.message) as { error?: string; path?: string };
+    if (parsed && typeof parsed.error === 'string') {
+      return `Firebase (${parsed.path || 'articles'}) : ${parsed.error}`;
+    }
+  } catch {
+    // Plain error message
+  }
+  return error.message || fallback;
+}
 
 function createBlankArticle(defaultCategory: string, defaultAuthor: string): Article {
   return {
@@ -66,6 +81,7 @@ export const AdminArticlesTab: React.FC = () => {
     saveArticle,
     transitionArticleStatus,
     deleteArticle,
+    purgeArchivedArticles,
   } = useApp();
 
   const [statusFilter, setStatusFilter] = useState<'all' | ArticleStatus>('all');
@@ -73,6 +89,8 @@ export const AdminArticlesTab: React.FC = () => {
   const [isNew, setIsNew] = useState(false);
   const [editorLang, setEditorLang] = useState<'fr' | 'ar'>('fr');
   const [reviewNoteInput, setReviewNoteInput] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmPurgeArchives, setConfirmPurgeArchives] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -80,6 +98,23 @@ export const AdminArticlesTab: React.FC = () => {
   const filtered = useMemo(() => {
     return articles.filter((a) => (statusFilter === 'all' ? true : a.status === statusFilter));
   }, [articles, statusFilter]);
+
+  const archivedCount = useMemo(
+    () => articles.filter((a) => a.status === 'archived').length,
+    [articles]
+  );
+
+  const estimatedDataKb = useMemo(() => {
+    const totalBytes = articles.reduce(
+      (sum, a) => sum + new Blob([JSON.stringify(a)]).size,
+      0
+    );
+    return Math.max(1, Math.round(totalBytes / 1024));
+  }, [articles]);
+
+  const canArchiveArticles =
+    isFounder || currentPermissions.delete_articles || currentPermissions.edit_all_articles;
+  const canDeleteArticles = isFounder || currentPermissions.delete_articles;
 
   const startCreate = () => {
     setError('');
@@ -154,7 +189,7 @@ export const AdminArticlesTab: React.FC = () => {
       );
       setEditing(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde.');
+      setError(formatErrorMessage(err, 'Erreur lors de la sauvegarde.'));
     } finally {
       setBusy(false);
     }
@@ -163,13 +198,20 @@ export const AdminArticlesTab: React.FC = () => {
   const handleWorkflowTransition = async (article: Article, nextStatus: ArticleStatus) => {
     setError('');
     setMessage('');
+    setConfirmDeleteId(null);
     setBusy(true);
     try {
       await transitionArticleStatus(article, nextStatus, reviewNoteInput);
       setReviewNoteInput('');
-      setMessage(`Statut mis à jour : ${ARTICLE_STATUS_LABELS[nextStatus].fr}`);
+      setMessage(
+        nextStatus === 'archived'
+          ? `Article « ${article.fr.title || article.ar.title} » archivé (retiré du site public).`
+          : nextStatus === 'draft' && article.status === 'archived'
+            ? `Article restauré en brouillon.`
+            : `Statut mis à jour : ${ARTICLE_STATUS_LABELS[nextStatus].fr}`
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action refusée par la politique de sécurité.');
+      setError(formatErrorMessage(err, 'Action refusée par la politique de sécurité.'));
     } finally {
       setBusy(false);
     }
@@ -181,9 +223,31 @@ export const AdminArticlesTab: React.FC = () => {
     setBusy(true);
     try {
       await deleteArticle(article);
-      setMessage('Article supprimé.');
+      setConfirmDeleteId(null);
+      setMessage(
+        `Article « ${article.fr.title || article.ar.title} » supprimé définitivement (base + médias Storage nettoyés).`
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Suppression refusée.');
+      setError(formatErrorMessage(err, 'Suppression refusée.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePurgeArchives = async () => {
+    setError('');
+    setMessage('');
+    setBusy(true);
+    try {
+      const count = await purgeArchivedArticles();
+      setConfirmPurgeArchives(false);
+      setMessage(
+        count > 0
+          ? `${count} article(s) archivé(s) et leurs images Firebase Storage supprimés pour libérer de l’espace.`
+          : 'Aucun article archivé à purger.'
+      );
+    } catch (err) {
+      setError(formatErrorMessage(err, 'Impossible de vider les archives.'));
     } finally {
       setBusy(false);
     }
@@ -518,6 +582,53 @@ export const AdminArticlesTab: React.FC = () => {
         </div>
       ) : (
         <>
+          {/* Storage & Archive Space Management Bar */}
+          <div className="p-4 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-slate-300">
+              <HardDrive className="w-4 h-4 shrink-0 text-slate-500" />
+              <span>
+                <strong>{articles.length}</strong> articles en base (~{estimatedDataKb} Ko) ·{' '}
+                <strong>{archivedCount}</strong> archivé(s). La suppression définitive efface aussi
+                les images téléversées dans Firebase Storage pour libérer de l’espace.
+              </span>
+            </div>
+
+            {canDeleteArticles && archivedCount > 0 && (
+              <div className="flex items-center gap-2 shrink-0">
+                {confirmPurgeArchives ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handlePurgeArchives()}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-60"
+                    >
+                      {busy ? 'Suppression…' : `Confirmer purge (${archivedCount})`}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmPurgeArchives(false)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                    >
+                      Annuler
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmPurgeArchives(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900 hover:bg-red-50 dark:hover:bg-red-950/40"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Vider les archives ({archivedCount})</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Workflow Filter Tabs */}
           <div className="flex flex-wrap items-center gap-1.5">
             {(
@@ -544,7 +655,11 @@ export const AdminArticlesTab: React.FC = () => {
                   statusFilter === st ? { backgroundColor: effectiveSettings.primaryColor } : undefined
                 }
               >
-                {st === 'all' ? `Tous (${articles.length})` : ARTICLE_STATUS_LABELS[st].fr}
+                {st === 'all'
+                  ? `Tous (${articles.length})`
+                  : st === 'archived'
+                    ? `${ARTICLE_STATUS_LABELS[st].fr} (${archivedCount})`
+                    : ARTICLE_STATUS_LABELS[st].fr}
               </button>
             ))}
           </div>
@@ -657,32 +772,67 @@ export const AdminArticlesTab: React.FC = () => {
                           <span>Corrections</span>
                         </button>
                       )}
-                      {article.status === 'published' && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void handleWorkflowTransition(article, 'archived')}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700"
-                        >
-                          <Archive className="w-3.5 h-3.5" />
-                          <span>Dépublier / Archiver</span>
-                        </button>
-                      )}
                     </>
                   )}
 
-                  {(isFounder ||
-                    (currentPermissions.delete_articles && article.status !== 'published')) && (
+                  {/* Archive / Restore controls (Founder & authorized family admins) */}
+                  {canArchiveArticles && article.status !== 'archived' && (
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => void handleDelete(article)}
-                      aria-label={`Supprimer ${article.fr.title || article.ar.title}`}
-                      className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                      onClick={() => void handleWorkflowTransition(article, 'archived')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Archive className="w-3.5 h-3.5" />
+                      <span>{article.status === 'published' ? 'Dépublier / Archiver' : 'Archiver'}</span>
                     </button>
                   )}
+
+                  {canArchiveArticles && article.status === 'archived' && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleWorkflowTransition(article, 'draft')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Restaurer (brouillon)</span>
+                    </button>
+                  )}
+
+                  {/* Permanent delete with inline 2-step confirmation (frees Firestore + Storage) */}
+                  {canDeleteArticles &&
+                    (confirmDeleteId === article.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleDelete(article)}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-60"
+                        >
+                          {busy ? '…' : 'Confirmer'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                        >
+                          Annuler
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setConfirmDeleteId(article.id)}
+                        aria-label={`Supprimer ${article.fr.title || article.ar.title}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Supprimer</span>
+                      </button>
+                    ))}
                 </div>
               </div>
             ))}

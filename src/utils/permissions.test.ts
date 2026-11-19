@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CO_FOUNDER_EMAILS,
   FOUNDER_EMAIL,
+  MAX_SUBMISSION_IMAGE_BYTES,
   TECH_DIRECTOR_EMAIL,
   canApproveOrPublish,
   canEditJournalistProfile,
@@ -12,6 +13,7 @@ import {
   isAuthorizedFamilyAdmin,
   resolveEffectivePermissions,
   validateArticleTransition,
+  validateSubmissionImageFile,
 } from './permissions';
 import { DEFAULT_ADMIN_USERS, DEFAULT_JOURNALISTS } from '../data/seedData';
 
@@ -184,4 +186,58 @@ test('extractVerifiedIdentity resolves Google email from providerData in multi-a
   const anon = extractVerifiedIdentity({ email: null, emailVerified: false, providerData: [] });
   assert.equal(anon.email, '');
   assert.equal(anon.emailVerified, false);
+});
+
+test('validateSubmissionImageFile strictly enforces 2 Mo max and JPG/PNG/WebP whitelist', () => {
+  assert.equal(validateSubmissionImageFile({ type: 'image/jpeg', size: 1_500_000 }).valid, true);
+  assert.equal(validateSubmissionImageFile({ type: 'image/png', size: MAX_SUBMISSION_IMAGE_BYTES }).valid, true);
+  assert.equal(validateSubmissionImageFile({ type: 'image/webp', size: 350_000 }).valid, true);
+
+  // Oversized image (> 2 Mo)
+  const tooLarge = validateSubmissionImageFile({ type: 'image/jpeg', size: MAX_SUBMISSION_IMAGE_BYTES + 1 });
+  assert.equal(tooLarge.valid, false);
+  assert.match(tooLarge.error || '', /2 Mo/);
+
+  // Blocked SVG / GIF / PDF formats
+  assert.equal(validateSubmissionImageFile({ type: 'image/svg+xml', size: 4000 }).valid, false);
+  assert.equal(validateSubmissionImageFile({ type: 'image/gif', size: 4000 }).valid, false);
+  assert.equal(validateSubmissionImageFile({ type: 'application/pdf', size: 4000 }).valid, false);
+
+  // Empty file
+  assert.equal(validateSubmissionImageFile({ type: 'image/png', size: 0 }).valid, false);
+});
+
+test('Tech Director can archive/restore articles and delete to free space, while publication stays Founder-only', () => {
+  assert.equal(canUserPerform(TECH_DIRECTOR_EMAIL, true, 'delete_articles', DEFAULT_ADMIN_USERS), true);
+
+  const archivePublished = validateArticleTransition({
+    actorEmail: TECH_DIRECTOR_EMAIL,
+    emailVerified: true,
+    existingStatus: 'published',
+    nextStatus: 'archived',
+    isArticleCreator: false,
+    adminUsers: DEFAULT_ADMIN_USERS,
+  });
+  assert.equal(archivePublished.allowed, true);
+
+  const restoreToDraft = validateArticleTransition({
+    actorEmail: TECH_DIRECTOR_EMAIL,
+    emailVerified: true,
+    existingStatus: 'archived',
+    nextStatus: 'draft',
+    isArticleCreator: false,
+    adminUsers: DEFAULT_ADMIN_USERS,
+  });
+  assert.equal(restoreToDraft.allowed, true);
+
+  // Still strictly forbidden from re-publishing an archived article
+  const republishAttempt = validateArticleTransition({
+    actorEmail: TECH_DIRECTOR_EMAIL,
+    emailVerified: true,
+    existingStatus: 'archived',
+    nextStatus: 'published',
+    isArticleCreator: false,
+    adminUsers: DEFAULT_ADMIN_USERS,
+  });
+  assert.equal(republishAttempt.allowed, false);
 });

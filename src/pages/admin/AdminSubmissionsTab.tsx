@@ -38,8 +38,8 @@ export const AdminSubmissionsTab: React.FC = () => {
             subtitle: '',
             summary: sub.summaryFr,
             content: sub.contentFr,
-            coverImageUrl: '',
-            coverCaption: '',
+            coverImageUrl: sub.coverImageUrl || '',
+            coverCaption: sub.coverImageCaption || '',
             ready: Boolean(sub.titleFr && sub.contentFr),
           },
           ar: {
@@ -47,8 +47,8 @@ export const AdminSubmissionsTab: React.FC = () => {
             subtitle: '',
             summary: sub.summaryAr,
             content: sub.contentAr,
-            coverImageUrl: '',
-            coverCaption: '',
+            coverImageUrl: sub.coverImageUrl || '',
+            coverCaption: sub.coverImageCaption || '',
             ready: Boolean(sub.titleAr && sub.contentAr),
           },
           reviewNotes: `Issu de la proposition externe de ${sub.authorName} (${sub.authorEmail}).`,
@@ -124,6 +124,25 @@ export const AdminSubmissionsTab: React.FC = () => {
                 <p className="text-sm text-slate-600 dark:text-slate-300">
                   {sub.summaryFr || sub.summaryAr}
                 </p>
+              )}
+
+              {sub.coverImageUrl && (
+                <div className="flex flex-col sm:flex-row items-start gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                  <img
+                    src={sub.coverImageUrl}
+                    alt={sub.coverImageCaption || sub.titleFr || sub.titleAr}
+                    className="w-full sm:w-40 h-24 object-cover rounded border border-slate-200 dark:border-slate-700"
+                  />
+                  <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                    <p className="font-semibold text-slate-900 dark:text-white">
+                      Photo d’article jointe
+                      {sub.coverImageSizeBytes
+                        ? ` (${Math.max(1, Math.round(sub.coverImageSizeBytes / 1024))} Ko)`
+                        : ''}
+                    </p>
+                    {sub.coverImageCaption && <p>{sub.coverImageCaption}</p>}
+                  </div>
+                </div>
               )}
 
               {sub.notesForEditors && (

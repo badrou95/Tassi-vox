@@ -47,4 +47,14 @@ test('Dirty Dozen security invariants are enforced inside firestore.rules', () =
   // 8. Non-founders can never hold manage_users
   assert.match(rulesSource, /permKey != 'manage_users'/);
   assert.match(rulesSource, /incoming\(\)\.permissions\.manage_users == false/);
+  // 9. External journalist accounts strictly start as 'pending' and require Direction approval before submitting
+  assert.match(rulesSource, /match \/journalistAccounts\/\{accountUid\}/);
+  assert.match(rulesSource, /incoming\(\)\.status == 'pending'/);
+  assert.match(rulesSource, /isApprovedJournalist\(\)/);
+  // 10. External submissions enforce mandatory HTTPS photo <= 2 MB (2097152 bytes)
+  assert.match(rulesSource, /data\.coverImageUrl\.matches\('\^https:\/\/\.\*'\)/);
+  assert.match(rulesSource, /data\.coverImageSizeBytes <= 2097152/);
+  // 11. Article archiving & deletion supported for authorized admins without weakening Founder-only publishing
+  assert.match(rulesSource, /incoming\(\)\.status == 'archived'/);
+  assert.match(rulesSource, /hasPermission\('delete_articles'\)/);
 });

@@ -44,24 +44,45 @@ service firebase.storage {
 
     function isValidImageUpload() {
       return request.resource != null
-        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp|gif|svg\\+xml)');
+    }
+
+    // Strict security cap for external journalist uploads: 2 MB max, JPG/PNG/WebP only (no SVG XSS)
+    function isValidExternalImageUpload() {
+      return request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
 
     // Public editorial media (article covers, site logo, journalist portraits)
     match /media/{folder}/{fileName} {
       allow read: if true;
-      allow write: if isVerifiedFamily()
+      allow create, update: if isVerifiedFamily()
         && folder in ['articles', 'journalists', 'branding']
         && isValidImageUpload();
+      allow delete: if isVerifiedFamily()
+        && folder in ['articles', 'journalists', 'branding'];
     }
 
-    // External journalist self-managed portrait upload scoped to their UID
+    // External journalist article photos (strictly <= 2 MB, JPG/PNG/WebP, scoped to UID)
+    match /submission-images/{uid}/{fileName} {
+      allow read: if true;
+      allow create, update: if isVerifiedUser()
+        && request.auth.uid == uid
+        && isValidExternalImageUpload();
+      allow delete: if isVerifiedFamily() || (isVerifiedUser() && request.auth.uid == uid);
+    }
+
+    // External journalist self-managed portrait upload scoped to their UID (<= 2 MB)
     match /journalist-avatars/{uid}/{fileName} {
       allow read: if true;
-      allow write: if isVerifiedUser()
+      allow create, update: if isVerifiedUser()
         && request.auth.uid == uid
-        && isValidImageUpload();
+        && isValidExternalImageUpload();
+      allow delete: if isVerifiedFamily() || (isVerifiedUser() && request.auth.uid == uid);
     }
 
     // Default deny everything else

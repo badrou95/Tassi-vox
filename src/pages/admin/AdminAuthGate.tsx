@@ -397,10 +397,22 @@ export const AdminAuthGate: React.FC = () => {
           )}
         </div>
 
-        <p className="text-center text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-          Accès strictement contrôlé par Firebase Authentication &amp; Firestore Security Rules.
-          Seuls les comptes familiaux autorisés peuvent accéder à ce panneau.
-        </p>
+        <div className="text-center space-y-2.5">
+          <div className="p-3.5 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex flex-wrap items-center justify-between gap-2">
+            <span>Vous êtes journaliste externe ?</span>
+            <Link
+              to="/fr/soumettre"
+              className="font-bold hover:underline"
+              style={{ color: effectiveSettings.primaryColor }}
+            >
+              Créer un compte journaliste →
+            </Link>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+            Accès strictement contrôlé par Firebase Authentication &amp; Firestore Security Rules.
+            Seuls les comptes familiaux autorisés peuvent accéder à ce panneau.
+          </p>
+        </div>
       </div>
     </div>
   );

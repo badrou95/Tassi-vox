@@ -76,7 +76,7 @@ export function createTechDirectorDefaultPermissions(): PermissionsMap {
     create_articles: true,
     edit_own_articles: true,
     edit_all_articles: true,
-    delete_articles: false,
+    delete_articles: true,
     upload_media: true,
     manage_categories: true,
     manage_comments: true,
@@ -316,6 +316,14 @@ export function validateArticleTransition(params: {
     return { allowed: true };
   }
 
+  // Non-founder archive / restore-to-draft transition (never publishes or approves)
+  if (
+    (perms.delete_articles || perms.edit_all_articles) &&
+    (nextStatus === 'archived' || (existingStatus === 'archived' && nextStatus === 'draft'))
+  ) {
+    return { allowed: true };
+  }
+
   // Non-founder update rule
   const canEdit = perms.edit_all_articles || (perms.edit_own_articles && isArticleCreator);
   if (!canEdit) {
@@ -398,4 +406,44 @@ export function canEditJournalistProfile(params: {
   }
 
   return { canEditFull: false, canEditOwnBioOnly: false };
+}
+
+export const MAX_SUBMISSION_IMAGE_BYTES = 2 * 1024 * 1024; // 2 Mo maximum for external journalist photos
+
+export const ALLOWED_SUBMISSION_IMAGE_MIMES: readonly string[] = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+];
+
+export function validateSubmissionImageFile(
+  file: { type: string; size: number },
+  lang: 'fr' | 'ar' = 'fr'
+): { valid: boolean; error?: string } {
+  if (!ALLOWED_SUBMISSION_IMAGE_MIMES.includes(file.type)) {
+    return {
+      valid: false,
+      error:
+        lang === 'ar'
+          ? 'صيغة الصورة غير مسموحة. يُقبل فقط JPG أو PNG أو WebP لأسباب أمنية.'
+          : 'Format d’image refusé par sécurité. Utilisez uniquement JPG, PNG ou WebP.',
+    };
+  }
+  if (!Number.isFinite(file.size) || file.size <= 0) {
+    return {
+      valid: false,
+      error: lang === 'ar' ? 'ملف الصورة فارغ.' : 'Le fichier image est vide.',
+    };
+  }
+  if (file.size > MAX_SUBMISSION_IMAGE_BYTES) {
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+    return {
+      valid: false,
+      error:
+        lang === 'ar'
+          ? `حجم الصورة (${sizeMb} ميغابايت) يتجاوز الحد الأمني الأقصى المسموح به وهو 2 ميغابايت.`
+          : `Image trop volumineuse (${sizeMb} Mo). Par sécurité, la taille maximale autorisée est de 2 Mo.`,
+    };
+  }
+  return { valid: true };
 }

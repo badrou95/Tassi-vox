@@ -1,8 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
-import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
+import { deleteObject, getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { validateSubmissionImageFile } from '../utils/permissions';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -93,11 +94,16 @@ export async function uploadMediaFile(
   folder: 'articles' | 'journalists' | 'branding' | 'journalist-avatar',
   ownerUid?: string
 ): Promise<string> {
-  if (!ALLOWED_IMAGE_MIMES.has(file.type)) {
-    throw new Error('Format non pris en charge. Utilisez JPG, PNG, WebP, GIF ou SVG.');
-  }
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error('Image trop volumineuse (maximum 5 Mo).');
+  if (folder === 'journalist-avatar') {
+    const check = validateSubmissionImageFile(file);
+    if (!check.valid) throw new Error(check.error);
+  } else {
+    if (!ALLOWED_IMAGE_MIMES.has(file.type)) {
+      throw new Error('Format non pris en charge. Utilisez JPG, PNG, WebP, GIF ou SVG.');
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new Error('Image trop volumineuse (maximum 5 Mo).');
+    }
   }
   const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
   const storagePath =
@@ -108,4 +114,43 @@ export async function uploadMediaFile(
   const storageRef = ref(storage, storagePath);
   await uploadBytes(storageRef, file, { contentType: file.type });
   return getDownloadURL(storageRef);
+}
+
+export async function uploadSubmissionImage(
+  file: File,
+  uid: string,
+  lang: 'fr' | 'ar' = 'fr'
+): Promise<{ url: string; sizeBytes: number }> {
+  const check = validateSubmissionImageFile(file, lang);
+  if (!check.valid) {
+    throw new Error(check.error);
+  }
+  const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const storageRef = ref(storage, `submission-images/${uid}/${safeName}`);
+  await uploadBytes(storageRef, file, { contentType: file.type });
+  const url = await getDownloadURL(storageRef);
+  return { url, sizeBytes: file.size };
+}
+
+/**
+ * Deletes an uploaded image from our Firebase Storage bucket to free space.
+ * Safely ignores local static paths, external URLs, or already-removed files.
+ */
+export async function deleteStorageFileByUrl(url: string | undefined): Promise<void> {
+  if (!url) return;
+  const trimmed = url.trim();
+  if (
+    !trimmed.startsWith('https://firebasestorage.googleapis.com/') &&
+    !trimmed.startsWith('https://storage.googleapis.com/') &&
+    !trimmed.startsWith('gs://')
+  ) {
+    return;
+  }
+  try {
+    const fileRef = ref(storage, trimmed);
+    await deleteObject(fileRef);
+  } catch (err) {
+    // Do not block article deletion if the image was already removed or shared
+    console.warn('Storage image cleanup skipped:', err instanceof Error ? err.message : err);
+  }
 }

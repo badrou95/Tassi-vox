@@ -121,7 +121,7 @@ service cloud.firestore {
           && isBootstrappedTechDirector()
           && permKey in [
             'view_dashboard', 'view_articles', 'create_articles',
-            'edit_own_articles', 'edit_all_articles', 'upload_media',
+            'edit_own_articles', 'edit_all_articles', 'delete_articles', 'upload_media',
             'manage_categories', 'manage_journalists',
             'manage_site_settings', 'manage_breaking_news', 'view_stats'
           ]
@@ -134,6 +134,13 @@ service cloud.firestore {
             'edit_own_articles', 'upload_media', 'manage_breaking_news'
           ]
         );
+    }
+
+    // External journalist explicitly approved by Direction
+    function isApprovedJournalist() {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/journalistAccounts/$(request.auth.uid))
+        && get(/databases/$(database)/documents/journalistAccounts/$(request.auth.uid)).data.status == 'approved';
     }
 
     // =========================================================
@@ -306,11 +313,13 @@ service cloud.firestore {
       return data.keys().hasAll([
           'authorUid', 'authorName', 'authorEmail', 'language', 'categoryId',
           'titleFr', 'titleAr', 'summaryFr', 'summaryAr', 'contentFr', 'contentAr',
+          'coverImageUrl', 'coverImageCaption', 'coverImageSizeBytes',
           'notesForEditors', 'status', 'linkedArticleId', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
           'authorUid', 'authorName', 'authorEmail', 'language', 'categoryId',
           'titleFr', 'titleAr', 'summaryFr', 'summaryAr', 'contentFr', 'contentAr',
+          'coverImageUrl', 'coverImageCaption', 'coverImageSizeBytes',
           'notesForEditors', 'status', 'linkedArticleId', 'createdAt', 'updatedAt'
         ])
         && data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128
@@ -324,9 +333,37 @@ service cloud.firestore {
         && data.summaryAr is string && data.summaryAr.size() <= 600
         && data.contentFr is string && data.contentFr.size() <= 25000
         && data.contentAr is string && data.contentAr.size() <= 25000
+        && data.coverImageUrl is string && data.coverImageUrl.size() >= 10 && data.coverImageUrl.size() <= 500
+        && data.coverImageUrl.matches('^https://.*')
+        && data.coverImageCaption is string && data.coverImageCaption.size() <= 240
+        && data.coverImageSizeBytes is number && data.coverImageSizeBytes > 0 && data.coverImageSizeBytes <= 2097152
         && data.notesForEditors is string && data.notesForEditors.size() <= 1000
         && data.status in ['received', 'in_review', 'converted_to_draft', 'declined']
         && data.linkedArticleId is string && data.linkedArticleId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJournalistAccount(data) {
+      return data.keys().hasAll([
+          'uid', 'email', 'fullName', 'specialty', 'phoneOrContact', 'bio', 'portfolioUrl',
+          'status', 'reviewedByEmail', 'reviewNotes', 'linkedJournalistId', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'email', 'fullName', 'specialty', 'phoneOrContact', 'bio', 'portfolioUrl',
+          'status', 'reviewedByEmail', 'reviewNotes', 'linkedJournalistId', 'createdAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.specialty is string && data.specialty.size() <= 160
+        && data.phoneOrContact is string && data.phoneOrContact.size() <= 80
+        && data.bio is string && data.bio.size() <= 600
+        && data.portfolioUrl is string && data.portfolioUrl.size() <= 300
+        && data.status in ['pending', 'approved', 'rejected', 'suspended']
+        && data.reviewedByEmail is string && data.reviewedByEmail.size() <= 160
+        && data.reviewNotes is string && data.reviewNotes.size() <= 500
+        && data.linkedJournalistId is string && data.linkedJournalistId.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -512,7 +549,7 @@ service cloud.firestore {
             ])
           )
           ||
-          // Tier 2: Authorized Family Editor — NEVER able to approve, publish, or modify published/approved articles
+          // Tier 2: Authorized Family Editor — NEVER able to approve, publish, or modify published/approved content
           (
             existing().status in ['draft', 'pending_review', 'changes_requested']
             && incoming().status in ['draft', 'pending_review']
@@ -527,13 +564,26 @@ service cloud.firestore {
               || (hasPermission('edit_own_articles') && existing().createdByUid == request.auth.uid)
             )
           )
+          ||
+          // Tier 3: Authorized Family Admin archiving an article or restoring an archived article to draft (NEVER publishing)
+          (
+            (hasPermission('delete_articles') || hasPermission('edit_all_articles'))
+            && (
+              incoming().status == 'archived'
+              || (existing().status == 'archived' && incoming().status == 'draft')
+            )
+            && incoming().approvedByEmail == existing().approvedByEmail
+            && incoming().approvedAt == existing().approvedAt
+            && incoming().publishedAt == existing().publishedAt
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
         );
 
       allow delete: if isVerifiedUser()
         && isValidId(articleId)
         && (
           isFounder()
-          || (existing().status != 'published' && hasPermission('delete_articles'))
+          || hasPermission('delete_articles')
         );
     }
 
@@ -592,7 +642,69 @@ service cloud.firestore {
     }
 
     // =========================================================
+    // 4B. EXTERNAL JOURNALIST ACCOUNTS (/journalistAccounts/{accountUid})
+    //     Must be explicitly approved by Direction before submitting
+    // =========================================================
+    match /journalistAccounts/{accountUid} {
+      allow get: if isValidId(accountUid) && isVerifiedUser() && (
+        request.auth.uid == accountUid
+        || isActiveFamilyAdmin()
+      );
+      allow list: if isActiveFamilyAdmin();
+
+      // Journalist creates their own account request strictly in 'pending' status (never self-approved)
+      allow create: if isVerifiedUser()
+        && isValidId(accountUid)
+        && accountUid == request.auth.uid
+        && isValidJournalistAccount(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().email == userEmail()
+        && incoming().status == 'pending'
+        && incoming().reviewedByEmail == ''
+        && incoming().reviewNotes == ''
+        && incoming().linkedJournalistId == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(accountUid)
+        && isValidJournalistAccount(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Tier 1: Direction (with manage_journalists) approves, rejects, or suspends the account
+          (
+            hasPermission('manage_journalists')
+            && incoming().reviewedByEmail == userEmail()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'reviewedByEmail', 'reviewNotes', 'linkedJournalistId', 'updatedAt'
+            ])
+          )
+          ||
+          // Tier 2: Applicant editing their own still-pending request (cannot self-approve)
+          (
+            existing().uid == request.auth.uid
+            && existing().status == 'pending'
+            && incoming().status == 'pending'
+            && incoming().reviewedByEmail == ''
+            && incoming().reviewNotes == ''
+            && incoming().linkedJournalistId == ''
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullName', 'specialty', 'phoneOrContact', 'bio', 'portfolioUrl', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(accountUid)
+        && hasPermission('manage_journalists');
+    }
+
+    // =========================================================
     // 5. EXTERNAL JOURNALIST SUBMISSIONS (/submissions/{submissionId})
+    //    Approved journalist accounts ONLY + mandatory <= 2MB photo
     // =========================================================
     match /submissions/{submissionId} {
       allow get: if isValidId(submissionId) && isVerifiedUser() && (
@@ -605,6 +717,7 @@ service cloud.firestore {
       );
 
       allow create: if isVerifiedUser()
+        && (isApprovedJournalist() || isActiveFamilyAdmin())
         && isValidId(submissionId)
         && isValidSubmission(incoming())
         && incoming().authorUid == request.auth.uid
@@ -634,7 +747,9 @@ service cloud.firestore {
             && incoming().linkedArticleId == ''
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'authorName', 'language', 'categoryId', 'titleFr', 'titleAr',
-              'summaryFr', 'summaryAr', 'contentFr', 'contentAr', 'notesForEditors', 'updatedAt'
+              'summaryFr', 'summaryAr', 'contentFr', 'contentAr',
+              'coverImageUrl', 'coverImageCaption', 'coverImageSizeBytes',
+              'notesForEditors', 'updatedAt'
             ])
           )
         );

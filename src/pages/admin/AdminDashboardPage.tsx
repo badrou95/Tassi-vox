@@ -42,6 +42,7 @@ export const AdminDashboardPage: React.FC = () => {
   const {
     user,
     userEmail,
+    jwtEmailMissing,
     authReady,
     isFamilyMember,
     isFounder,
@@ -54,6 +55,7 @@ export const AdminDashboardPage: React.FC = () => {
     articles,
     breakingNews,
     journalists,
+    journalistAccounts,
     submissions,
     auditLogs,
     isFirestoreSeeded,
@@ -72,6 +74,7 @@ export const AdminDashboardPage: React.FC = () => {
   const publishedCount = articles.filter((a) => a.status === 'published').length;
   const activeBreakingCount = breakingNews.filter((b) => b.status === 'active').length;
   const pendingSubmissionsCount = submissions.filter((s) => s.status === 'received').length;
+  const pendingJournalistAccountsCount = journalistAccounts.filter((a) => a.status === 'pending').length;
 
   const allNavItems: {
     id: AdminTab;
@@ -114,9 +117,10 @@ export const AdminDashboardPage: React.FC = () => {
     },
     {
       id: 'journalists',
-      label: 'Équipe rédactionnelle',
+      label: 'Journalistes & Comptes',
       icon: UserSquare2,
       visible: currentPermissions.manage_journalists || isFounder,
+      badge: pendingJournalistAccountsCount,
     },
     {
       id: 'users',
@@ -249,6 +253,32 @@ export const AdminDashboardPage: React.FC = () => {
         </header>
 
         <main className="flex-1 p-6 lg:p-8 max-w-[1200px] w-full mx-auto space-y-6">
+          {jwtEmailMissing && (
+            <div
+              role="alert"
+              className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200"
+            >
+              <div className="space-y-1">
+                <p className="font-bold">
+                  Session Firebase à actualiser (jeton sans adresse e-mail)
+                </p>
+                <p>
+                  Votre compte Google a été créé alors que Firebase Auth utilisait le mode multi-comptes
+                  (Identifiant « - »). Déconnectez-vous puis reconnectez-vous après avoir supprimé
+                  l’ancienne ligne « - » dans Firebase Console → Authentication → Utilisateurs afin que
+                  toutes les sauvegardes et suppressions soient acceptées.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void logout()}
+                className="px-3.5 py-2 rounded-lg font-bold bg-amber-700 text-white hover:bg-amber-800 shrink-0"
+              >
+                Se déconnecter
+              </button>
+            </div>
+          )}
+
           {/* Founder 1-Click Initial Firebase Database Bootstrap */}
           {isFounder && !isFirestoreSeeded && (
             <div className="p-5 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
