@@ -1,0 +1,310 @@
+{
+  "entities": {
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global customizable brand, visual identity, navigation, categories, contact, social links, and legal configuration for TASSI-VOX.",
+      "type": "object",
+      "properties": {
+        "mediaName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "logoUrl": { "type": "string", "maxLength": 500 },
+        "sloganFr": { "type": "string", "maxLength": 200 },
+        "sloganAr": { "type": "string", "maxLength": 200 },
+        "descriptionFr": { "type": "string", "maxLength": 600 },
+        "descriptionAr": { "type": "string", "maxLength": 600 },
+        "primaryColor": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "maxLength": 7 },
+        "secondaryColor": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "maxLength": 7 },
+        "accentColor": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "maxLength": 7 },
+        "breakingColor": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "maxLength": 7 },
+        "breakingBannerEnabled": { "type": "boolean" },
+        "heroTitleFr": { "type": "string", "maxLength": 160 },
+        "heroTitleAr": { "type": "string", "maxLength": 160 },
+        "heroSubtitleFr": { "type": "string", "maxLength": 360 },
+        "heroSubtitleAr": { "type": "string", "maxLength": 360 },
+        "categories": { "type": "array", "description": "Bounded list (max 20) of bilingual categories." },
+        "navigation": { "type": "array", "description": "Bounded list (max 10) of navigation links." },
+        "contactEmail": { "type": "string", "maxLength": 160 },
+        "contactPhone": { "type": "string", "maxLength": 60 },
+        "contactAddressFr": { "type": "string", "maxLength": 240 },
+        "contactAddressAr": { "type": "string", "maxLength": 240 },
+        "socials": { "type": "object" },
+        "footerTextFr": { "type": "string", "maxLength": 400 },
+        "footerTextAr": { "type": "string", "maxLength": 400 },
+        "legalTextFr": { "type": "string", "maxLength": 8000 },
+        "legalTextAr": { "type": "string", "maxLength": 8000 },
+        "updatedByEmail": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "mediaName",
+        "logoUrl",
+        "sloganFr",
+        "sloganAr",
+        "descriptionFr",
+        "descriptionAr",
+        "primaryColor",
+        "secondaryColor",
+        "accentColor",
+        "breakingColor",
+        "breakingBannerEnabled",
+        "heroTitleFr",
+        "heroTitleAr",
+        "heroSubtitleFr",
+        "heroSubtitleAr",
+        "categories",
+        "navigation",
+        "contactEmail",
+        "contactPhone",
+        "contactAddressFr",
+        "contactAddressAr",
+        "socials",
+        "footerTextFr",
+        "footerTextAr",
+        "legalTextFr",
+        "legalTextAr",
+        "updatedByEmail",
+        "updatedAt"
+      ]
+    },
+    "BreakingNews": {
+      "title": "BreakingNews",
+      "description": "Urgent breaking news ticker items displayed in the red DERNIERE MINUTE banner.",
+      "type": "object",
+      "properties": {
+        "textFr": { "type": "string", "minLength": 1, "maxLength": 260 },
+        "textAr": { "type": "string", "minLength": 1, "maxLength": 260 },
+        "articleSlug": { "type": "string", "maxLength": 140 },
+        "status": { "type": "string", "enum": ["active", "paused", "archived"] },
+        "sortOrder": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "expiresAt": { "type": "string", "maxLength": 64 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "textFr",
+        "textAr",
+        "articleSlug",
+        "status",
+        "sortOrder",
+        "durationSeconds",
+        "expiresAt",
+        "createdByUid",
+        "createdByEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Article": {
+      "title": "Article",
+      "description": "Bilingual French/Arabic news article with Founder-exclusive publication approval workflow.",
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "pattern": "^[a-z0-9\\-]+$", "minLength": 2, "maxLength": 120 },
+        "categoryId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "pending_review", "changes_requested", "approved", "published", "archived"]
+        },
+        "isFeatured": { "type": "boolean" },
+        "fr": { "type": "object" },
+        "ar": { "type": "object" },
+        "reviewNotes": { "type": "string", "maxLength": 2000 },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByEmail": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "approvedByEmail": { "type": "string", "maxLength": 160 },
+        "approvedAt": { "type": "string", "maxLength": 64 },
+        "publishedAt": { "type": "string", "maxLength": 64 },
+        "viewsCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "slug",
+        "categoryId",
+        "authorId",
+        "status",
+        "isFeatured",
+        "fr",
+        "ar",
+        "reviewNotes",
+        "createdByUid",
+        "createdByEmail",
+        "approvedByEmail",
+        "approvedAt",
+        "publishedAt",
+        "viewsCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Journalist": {
+      "title": "Journalist",
+      "description": "Public editorial team journalist profile (no private PII stored here).",
+      "type": "object",
+      "properties": {
+        "fullNameFr": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "fullNameAr": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "roleFr": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "roleAr": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "bioFr": { "type": "string", "maxLength": 600 },
+        "bioAr": { "type": "string", "maxLength": 600 },
+        "careerFr": { "type": "string", "maxLength": 3000 },
+        "careerAr": { "type": "string", "maxLength": 3000 },
+        "coverageAreasFr": { "type": "array" },
+        "coverageAreasAr": { "type": "array" },
+        "photoUrl": { "type": "string", "maxLength": 500 },
+        "socials": { "type": "object" },
+        "ownerUid": { "type": "string", "maxLength": 128 },
+        "isVisible": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "fullNameFr",
+        "fullNameAr",
+        "roleFr",
+        "roleAr",
+        "bioFr",
+        "bioAr",
+        "careerFr",
+        "careerAr",
+        "coverageAreasFr",
+        "coverageAreasAr",
+        "photoUrl",
+        "socials",
+        "ownerUid",
+        "isVisible",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "Secure editorial submission sent by an external journalist to the family editorial team without admin access.",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "authorEmail": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "language": { "type": "string", "enum": ["fr", "ar", "bilingual"] },
+        "categoryId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "titleFr": { "type": "string", "maxLength": 220 },
+        "titleAr": { "type": "string", "maxLength": 220 },
+        "summaryFr": { "type": "string", "maxLength": 600 },
+        "summaryAr": { "type": "string", "maxLength": 600 },
+        "contentFr": { "type": "string", "maxLength": 25000 },
+        "contentAr": { "type": "string", "maxLength": 25000 },
+        "notesForEditors": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["received", "in_review", "converted_to_draft", "declined"] },
+        "linkedArticleId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorUid",
+        "authorName",
+        "authorEmail",
+        "language",
+        "categoryId",
+        "titleFr",
+        "titleAr",
+        "summaryFr",
+        "summaryAr",
+        "contentFr",
+        "contentAr",
+        "notesForEditors",
+        "status",
+        "linkedArticleId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Strictly private family administrator account with granular permissions managed exclusively by the Founder.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "familyRelation": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["founder", "tech_director", "co_founder"] },
+        "isActive": { "type": "boolean" },
+        "isProtectedOwner": { "type": "boolean" },
+        "permissions": { "type": "object" },
+        "updatedByEmail": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "email",
+        "displayName",
+        "familyRelation",
+        "role",
+        "isActive",
+        "isProtectedOwner",
+        "permissions",
+        "updatedByEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable append-only security and editorial audit trail for sensitive actions.",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "targetCollection": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 600 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorEmail": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "actorRole": { "type": "string", "enum": ["founder", "tech_director", "co_founder"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "action",
+        "targetCollection",
+        "targetId",
+        "details",
+        "actorUid",
+        "actorEmail",
+        "actorRole",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/siteSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteSettings" },
+      "description": "Global site customization settings document (settingId = 'main')."
+    },
+    "/breakingNews/{alertId}": {
+      "schema": { "$ref": "#/entities/BreakingNews" },
+      "description": "Urgent breaking news ticker alerts."
+    },
+    "/articles/{articleId}": {
+      "schema": { "$ref": "#/entities/Article" },
+      "description": "Bilingual French/Arabic editorial articles with Founder-only approval."
+    },
+    "/journalists/{journalistId}": {
+      "schema": { "$ref": "#/entities/Journalist" },
+      "description": "Public journalist directory profiles (zero private PII)."
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/Submission" },
+      "description": "External journalist article submissions inbox."
+    },
+    "/adminUsers/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Private family-only administration access allowlist and granular permissions."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable append-only audit log of editorial and security actions."
+    }
+  }
+}

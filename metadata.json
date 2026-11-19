@@ -1,0 +1,6 @@
+{
+  "name": "TASSI-VOX",
+  "description": "Plateforme médiatique internationale bilingue (Français / Arabe RTL) avec fil Dernière Minute, personnalisation intégrale en direct via Firebase, équipe rédactionnelle et contrôle éditorial familial sécurisé.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

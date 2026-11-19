@@ -1,0 +1,683 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================
+    // GLOBAL PRIMITIVES & IDENTITY HELPERS (EIGHT PILLARS)
+    // =========================================================
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+
+    function userEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function emailKey(email) {
+      return email.lower().replace('[^a-z0-9]', '_');
+    }
+
+    // Protected Founder identity (sole owner & exclusive publication authority)
+    function isFounder() {
+      return isVerifiedUser() && userEmail() == 'tmerzak@gmail.com';
+    }
+
+    function isBootstrappedTechDirector() {
+      return isVerifiedUser() && userEmail() == 'badroumc@gmail.com';
+    }
+
+    function isBootstrappedCoFounder() {
+      return isVerifiedUser() && (
+        userEmail() == 'tigrine156@gmail.com' ||
+        userEmail() == 'tigrinemelissalyna@gmail.com'
+      );
+    }
+
+    function hasAdminDoc() {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/adminUsers/$(emailKey(userEmail())));
+    }
+
+    function adminDocData() {
+      return get(/databases/$(database)/documents/adminUsers/$(emailKey(userEmail()))).data;
+    }
+
+    // Active family admin: Founder is always active; other family accounts follow Firestore adminUsers doc (or initial bootstrap before Founder configures them)
+    function isActiveFamilyAdmin() {
+      return isFounder()
+        || (
+          isVerifiedUser()
+          && hasAdminDoc()
+          && adminDocData().isActive == true
+          && adminDocData().email == userEmail()
+          && adminDocData().role in ['founder', 'tech_director', 'co_founder']
+        )
+        || (
+          !hasAdminDoc()
+          && (isBootstrappedTechDirector() || isBootstrappedCoFounder())
+        );
+    }
+
+    function hasPermission(permKey) {
+      return isFounder()
+        || (
+          isVerifiedUser()
+          && hasAdminDoc()
+          && adminDocData().isActive == true
+          && adminDocData().email == userEmail()
+          && adminDocData().role in ['founder', 'tech_director', 'co_founder']
+          && adminDocData().permissions is map
+          && permKey in adminDocData().permissions
+          && adminDocData().permissions[permKey] == true
+          && permKey != 'manage_users'
+        )
+        || (
+          !hasAdminDoc()
+          && isBootstrappedTechDirector()
+          && permKey in [
+            'view_dashboard', 'view_articles', 'create_articles',
+            'edit_own_articles', 'edit_all_articles', 'upload_media',
+            'manage_categories', 'manage_journalists',
+            'manage_site_settings', 'manage_breaking_news', 'view_stats'
+          ]
+        )
+        || (
+          !hasAdminDoc()
+          && isBootstrappedCoFounder()
+          && permKey in [
+            'view_dashboard', 'view_articles', 'create_articles',
+            'edit_own_articles', 'upload_media', 'manage_breaking_news'
+          ]
+        );
+    }
+
+    // =========================================================
+    // VALIDATION BLUEPRINTS (ANTI-UPDATE-GAP)
+    // =========================================================
+
+    function isHexColor(val) {
+      return val is string && val.size() == 7 && val.matches('^#[0-9a-fA-F]{6}$');
+    }
+
+    function isValidSocialsMap(socials) {
+      return socials is map
+        && socials.keys().hasOnly(['x', 'facebook', 'instagram', 'youtube', 'linkedin', 'website'])
+        && (!('x' in socials) || (socials.x is string && socials.x.size() <= 300))
+        && (!('facebook' in socials) || (socials.facebook is string && socials.facebook.size() <= 300))
+        && (!('instagram' in socials) || (socials.instagram is string && socials.instagram.size() <= 300))
+        && (!('youtube' in socials) || (socials.youtube is string && socials.youtube.size() <= 300))
+        && (!('linkedin' in socials) || (socials.linkedin is string && socials.linkedin.size() <= 300))
+        && (!('website' in socials) || (socials.website is string && socials.website.size() <= 300));
+    }
+
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll([
+          'mediaName', 'logoUrl', 'sloganFr', 'sloganAr', 'descriptionFr', 'descriptionAr',
+          'primaryColor', 'secondaryColor', 'accentColor', 'breakingColor', 'breakingBannerEnabled',
+          'heroTitleFr', 'heroTitleAr', 'heroSubtitleFr', 'heroSubtitleAr',
+          'categories', 'navigation', 'contactEmail', 'contactPhone',
+          'contactAddressFr', 'contactAddressAr', 'socials',
+          'footerTextFr', 'footerTextAr', 'legalTextFr', 'legalTextAr',
+          'updatedByEmail', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'mediaName', 'logoUrl', 'sloganFr', 'sloganAr', 'descriptionFr', 'descriptionAr',
+          'primaryColor', 'secondaryColor', 'accentColor', 'breakingColor', 'breakingBannerEnabled',
+          'heroTitleFr', 'heroTitleAr', 'heroSubtitleFr', 'heroSubtitleAr',
+          'categories', 'navigation', 'contactEmail', 'contactPhone',
+          'contactAddressFr', 'contactAddressAr', 'socials',
+          'footerTextFr', 'footerTextAr', 'legalTextFr', 'legalTextAr',
+          'updatedByEmail', 'updatedAt'
+        ])
+        && data.mediaName is string && data.mediaName.size() >= 1 && data.mediaName.size() <= 80
+        && data.logoUrl is string && data.logoUrl.size() <= 500
+        && data.sloganFr is string && data.sloganFr.size() <= 200
+        && data.sloganAr is string && data.sloganAr.size() <= 200
+        && data.descriptionFr is string && data.descriptionFr.size() <= 600
+        && data.descriptionAr is string && data.descriptionAr.size() <= 600
+        && isHexColor(data.primaryColor)
+        && isHexColor(data.secondaryColor)
+        && isHexColor(data.accentColor)
+        && isHexColor(data.breakingColor)
+        && data.breakingBannerEnabled is bool
+        && data.heroTitleFr is string && data.heroTitleFr.size() <= 160
+        && data.heroTitleAr is string && data.heroTitleAr.size() <= 160
+        && data.heroSubtitleFr is string && data.heroSubtitleFr.size() <= 360
+        && data.heroSubtitleAr is string && data.heroSubtitleAr.size() <= 360
+        && data.categories is list && data.categories.size() <= 20
+        && (data.categories.size() == 0 || data.categories[0] is map)
+        && data.navigation is list && data.navigation.size() <= 10
+        && (data.navigation.size() == 0 || data.navigation[0] is map)
+        && data.contactEmail is string && data.contactEmail.size() <= 160
+        && data.contactPhone is string && data.contactPhone.size() <= 60
+        && data.contactAddressFr is string && data.contactAddressFr.size() <= 240
+        && data.contactAddressAr is string && data.contactAddressAr.size() <= 240
+        && isValidSocialsMap(data.socials)
+        && data.footerTextFr is string && data.footerTextFr.size() <= 400
+        && data.footerTextAr is string && data.footerTextAr.size() <= 400
+        && data.legalTextFr is string && data.legalTextFr.size() <= 8000
+        && data.legalTextAr is string && data.legalTextAr.size() <= 8000
+        && data.updatedByEmail is string && data.updatedByEmail.size() <= 160
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBreakingNews(data) {
+      return data.keys().hasAll([
+          'textFr', 'textAr', 'articleSlug', 'status', 'sortOrder', 'durationSeconds',
+          'expiresAt', 'createdByUid', 'createdByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'textFr', 'textAr', 'articleSlug', 'status', 'sortOrder', 'durationSeconds',
+          'expiresAt', 'createdByUid', 'createdByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.textFr is string && data.textFr.size() >= 1 && data.textFr.size() <= 260
+        && data.textAr is string && data.textAr.size() >= 1 && data.textAr.size() <= 260
+        && data.articleSlug is string && data.articleSlug.size() <= 140
+        && data.status in ['active', 'paused', 'archived']
+        && data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 9999
+        && data.durationSeconds is number && data.durationSeconds >= 5 && data.durationSeconds <= 180
+        && data.expiresAt is string && data.expiresAt.size() <= 64
+        && data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128
+        && data.createdByEmail is string && data.createdByEmail.size() >= 3 && data.createdByEmail.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidArticleLocale(loc) {
+      return loc is map
+        && loc.keys().hasAll(['title', 'subtitle', 'summary', 'content', 'coverImageUrl', 'coverCaption', 'ready'])
+        && loc.keys().hasOnly(['title', 'subtitle', 'summary', 'content', 'coverImageUrl', 'coverCaption', 'ready'])
+        && loc.title is string && loc.title.size() <= 220
+        && loc.subtitle is string && loc.subtitle.size() <= 320
+        && loc.summary is string && loc.summary.size() <= 700
+        && loc.content is string && loc.content.size() <= 40000
+        && loc.coverImageUrl is string && loc.coverImageUrl.size() <= 500
+        && loc.coverCaption is string && loc.coverCaption.size() <= 240
+        && loc.ready is bool;
+    }
+
+    function isValidArticle(data) {
+      return data.keys().hasAll([
+          'slug', 'categoryId', 'authorId', 'status', 'isFeatured', 'fr', 'ar',
+          'reviewNotes', 'createdByUid', 'createdByEmail',
+          'approvedByEmail', 'approvedAt', 'publishedAt', 'viewsCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'slug', 'categoryId', 'authorId', 'status', 'isFeatured', 'fr', 'ar',
+          'reviewNotes', 'createdByUid', 'createdByEmail',
+          'approvedByEmail', 'approvedAt', 'publishedAt', 'viewsCount', 'createdAt', 'updatedAt'
+        ])
+        && data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 120 && data.slug.matches('^[a-z0-9\\-]+$')
+        && data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 64
+        && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
+        && data.status in ['draft', 'pending_review', 'changes_requested', 'approved', 'published', 'archived']
+        && data.isFeatured is bool
+        && isValidArticleLocale(data.fr)
+        && isValidArticleLocale(data.ar)
+        && data.reviewNotes is string && data.reviewNotes.size() <= 2000
+        && data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128
+        && data.createdByEmail is string && data.createdByEmail.size() >= 3 && data.createdByEmail.size() <= 160
+        && data.approvedByEmail is string && data.approvedByEmail.size() <= 160
+        && data.approvedAt is string && data.approvedAt.size() <= 64
+        && data.publishedAt is string && data.publishedAt.size() <= 64
+        && data.viewsCount is number && data.viewsCount >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJournalist(data) {
+      return data.keys().hasAll([
+          'fullNameFr', 'fullNameAr', 'roleFr', 'roleAr', 'bioFr', 'bioAr',
+          'careerFr', 'careerAr', 'coverageAreasFr', 'coverageAreasAr',
+          'photoUrl', 'socials', 'ownerUid', 'isVisible', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'fullNameFr', 'fullNameAr', 'roleFr', 'roleAr', 'bioFr', 'bioAr',
+          'careerFr', 'careerAr', 'coverageAreasFr', 'coverageAreasAr',
+          'photoUrl', 'socials', 'ownerUid', 'isVisible', 'createdAt', 'updatedAt'
+        ])
+        && data.fullNameFr is string && data.fullNameFr.size() >= 2 && data.fullNameFr.size() <= 120
+        && data.fullNameAr is string && data.fullNameAr.size() >= 2 && data.fullNameAr.size() <= 120
+        && data.roleFr is string && data.roleFr.size() >= 2 && data.roleFr.size() <= 120
+        && data.roleAr is string && data.roleAr.size() >= 2 && data.roleAr.size() <= 120
+        && data.bioFr is string && data.bioFr.size() <= 600
+        && data.bioAr is string && data.bioAr.size() <= 600
+        && data.careerFr is string && data.careerFr.size() <= 3000
+        && data.careerAr is string && data.careerAr.size() <= 3000
+        && data.coverageAreasFr is list && data.coverageAreasFr.size() <= 10
+        && (data.coverageAreasFr.size() == 0 || data.coverageAreasFr[0] is string)
+        && data.coverageAreasAr is list && data.coverageAreasAr.size() <= 10
+        && (data.coverageAreasAr.size() == 0 || data.coverageAreasAr[0] is string)
+        && data.photoUrl is string && data.photoUrl.size() <= 500
+        && isValidSocialsMap(data.socials)
+        && data.ownerUid is string && data.ownerUid.size() <= 128
+        && data.isVisible is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubmission(data) {
+      return data.keys().hasAll([
+          'authorUid', 'authorName', 'authorEmail', 'language', 'categoryId',
+          'titleFr', 'titleAr', 'summaryFr', 'summaryAr', 'contentFr', 'contentAr',
+          'notesForEditors', 'status', 'linkedArticleId', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'authorUid', 'authorName', 'authorEmail', 'language', 'categoryId',
+          'titleFr', 'titleAr', 'summaryFr', 'summaryAr', 'contentFr', 'contentAr',
+          'notesForEditors', 'status', 'linkedArticleId', 'createdAt', 'updatedAt'
+        ])
+        && data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128
+        && data.authorName is string && data.authorName.size() >= 2 && data.authorName.size() <= 120
+        && data.authorEmail is string && data.authorEmail.size() >= 5 && data.authorEmail.size() <= 160
+        && data.language in ['fr', 'ar', 'bilingual']
+        && data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 64
+        && data.titleFr is string && data.titleFr.size() <= 220
+        && data.titleAr is string && data.titleAr.size() <= 220
+        && data.summaryFr is string && data.summaryFr.size() <= 600
+        && data.summaryAr is string && data.summaryAr.size() <= 600
+        && data.contentFr is string && data.contentFr.size() <= 25000
+        && data.contentAr is string && data.contentAr.size() <= 25000
+        && data.notesForEditors is string && data.notesForEditors.size() <= 1000
+        && data.status in ['received', 'in_review', 'converted_to_draft', 'declined']
+        && data.linkedArticleId is string && data.linkedArticleId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPermissionsMap(perms) {
+      return perms is map
+        && perms.keys().hasAll([
+          'view_dashboard', 'view_articles', 'create_articles',
+          'edit_own_articles', 'edit_all_articles', 'delete_articles',
+          'upload_media', 'manage_categories', 'manage_comments',
+          'manage_journalists', 'manage_site_settings', 'manage_users',
+          'manage_breaking_news', 'view_stats'
+        ])
+        && perms.keys().hasOnly([
+          'view_dashboard', 'view_articles', 'create_articles',
+          'edit_own_articles', 'edit_all_articles', 'delete_articles',
+          'upload_media', 'manage_categories', 'manage_comments',
+          'manage_journalists', 'manage_site_settings', 'manage_users',
+          'manage_breaking_news', 'view_stats'
+        ])
+        && perms.view_dashboard is bool
+        && perms.view_articles is bool
+        && perms.create_articles is bool
+        && perms.edit_own_articles is bool
+        && perms.edit_all_articles is bool
+        && perms.delete_articles is bool
+        && perms.upload_media is bool
+        && perms.manage_categories is bool
+        && perms.manage_comments is bool
+        && perms.manage_journalists is bool
+        && perms.manage_site_settings is bool
+        && perms.manage_users is bool
+        && perms.manage_breaking_news is bool
+        && perms.view_stats is bool;
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll([
+          'email', 'displayName', 'familyRelation', 'role', 'isActive',
+          'isProtectedOwner', 'permissions', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'email', 'displayName', 'familyRelation', 'role', 'isActive',
+          'isProtectedOwner', 'permissions', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.familyRelation is string && data.familyRelation.size() >= 2 && data.familyRelation.size() <= 120
+        && data.role in ['founder', 'tech_director', 'co_founder']
+        && data.isActive is bool
+        && data.isProtectedOwner is bool
+        && isValidPermissionsMap(data.permissions)
+        && data.updatedByEmail is string && data.updatedByEmail.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll([
+          'action', 'targetCollection', 'targetId', 'details',
+          'actorUid', 'actorEmail', 'actorRole', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'action', 'targetCollection', 'targetId', 'details',
+          'actorUid', 'actorEmail', 'actorRole', 'createdAt'
+        ])
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
+        && data.targetCollection is string && data.targetCollection.size() >= 2 && data.targetCollection.size() <= 64
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && data.details is string && data.details.size() <= 600
+        && data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128
+        && data.actorEmail is string && data.actorEmail.size() >= 5 && data.actorEmail.size() <= 160
+        && data.actorRole in ['founder', 'tech_director', 'co_founder']
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================
+    // 1. SITE SETTINGS (/siteSettings/main)
+    // =========================================================
+    match /siteSettings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'main';
+      allow list: if false;
+      allow create: if isVerifiedUser()
+        && isValidId(settingId) && settingId == 'main'
+        && isValidSiteSettings(incoming())
+        && incoming().updatedByEmail == userEmail()
+        && incoming().updatedAt == request.time
+        && hasPermission('manage_site_settings');
+      allow update: if isVerifiedUser()
+        && isValidId(settingId) && settingId == 'main'
+        && isValidSiteSettings(incoming())
+        && incoming().updatedByEmail == userEmail()
+        && incoming().updatedAt == request.time
+        && (
+          hasPermission('manage_site_settings')
+          || (
+            hasPermission('manage_categories')
+            && incoming().diff(existing()).affectedKeys().hasOnly(['categories', 'updatedByEmail', 'updatedAt'])
+          )
+          || (
+            hasPermission('manage_breaking_news')
+            && incoming().diff(existing()).affectedKeys().hasOnly(['breakingBannerEnabled', 'breakingColor', 'updatedByEmail', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // =========================================================
+    // 2. BREAKING NEWS (/breakingNews/{alertId})
+    // =========================================================
+    match /breakingNews/{alertId} {
+      allow get: if isValidId(alertId) && (
+        existing().status == 'active'
+        || isActiveFamilyAdmin()
+      );
+      allow list: if existing().status == 'active' || isActiveFamilyAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(alertId)
+        && isValidBreakingNews(incoming())
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdByEmail == userEmail()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasPermission('manage_breaking_news');
+      allow update: if isVerifiedUser()
+        && isValidId(alertId)
+        && isValidBreakingNews(incoming())
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdByEmail == existing().createdByEmail
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'textFr', 'textAr', 'articleSlug', 'status', 'sortOrder', 'durationSeconds', 'expiresAt', 'updatedAt'
+        ])
+        && hasPermission('manage_breaking_news');
+      allow delete: if isVerifiedUser()
+        && isValidId(alertId)
+        && hasPermission('manage_breaking_news');
+    }
+
+    // =========================================================
+    // 3. ARTICLES (/articles/{articleId}) — FOUNDER-ONLY PUBLISH
+    // =========================================================
+    match /articles/{articleId} {
+      allow get: if isValidId(articleId) && (
+        existing().status == 'published'
+        || hasPermission('view_articles')
+      );
+      allow list: if existing().status == 'published' || hasPermission('view_articles');
+
+      allow create: if isVerifiedUser()
+        && isValidId(articleId)
+        && isValidArticle(incoming())
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdByEmail == userEmail()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isFounder()
+          || (
+            hasPermission('create_articles')
+            && incoming().status in ['draft', 'pending_review']
+            && incoming().approvedByEmail == ''
+            && incoming().approvedAt == ''
+            && incoming().publishedAt == ''
+          )
+        );
+
+      allow update: if isVerifiedUser()
+        && isValidId(articleId)
+        && isValidArticle(incoming())
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdByEmail == existing().createdByEmail
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Tier 1: Founder — exclusive approval, publish, unpublish, archive, and full edit authority
+          (
+            isFounder()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'slug', 'categoryId', 'authorId', 'status', 'isFeatured', 'fr', 'ar',
+              'reviewNotes', 'approvedByEmail', 'approvedAt', 'publishedAt', 'viewsCount', 'updatedAt'
+            ])
+          )
+          ||
+          // Tier 2: Authorized Family Editor — NEVER able to approve, publish, or modify published/approved articles
+          (
+            existing().status in ['draft', 'pending_review', 'changes_requested']
+            && incoming().status in ['draft', 'pending_review']
+            && incoming().approvedByEmail == existing().approvedByEmail
+            && incoming().approvedAt == existing().approvedAt
+            && incoming().publishedAt == existing().publishedAt
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'slug', 'categoryId', 'authorId', 'status', 'isFeatured', 'fr', 'ar', 'updatedAt'
+            ])
+            && (
+              hasPermission('edit_all_articles')
+              || (hasPermission('edit_own_articles') && existing().createdByUid == request.auth.uid)
+            )
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(articleId)
+        && (
+          isFounder()
+          || (existing().status != 'published' && hasPermission('delete_articles'))
+        );
+    }
+
+    // =========================================================
+    // 4. JOURNALIST PROFILES (/journalists/{journalistId})
+    // =========================================================
+    match /journalists/{journalistId} {
+      allow get: if isValidId(journalistId) && (
+        existing().isVisible == true
+        || isActiveFamilyAdmin()
+        || (isVerifiedUser() && existing().ownerUid == request.auth.uid)
+      );
+      allow list: if existing().isVisible == true
+        || isActiveFamilyAdmin()
+        || (isVerifiedUser() && existing().ownerUid == request.auth.uid);
+
+      allow create: if isVerifiedUser()
+        && isValidId(journalistId)
+        && isValidJournalist(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && hasPermission('manage_journalists');
+
+      allow update: if isVerifiedUser()
+        && isValidId(journalistId)
+        && isValidJournalist(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Tier 1: Family admin with manage_journalists
+          (
+            hasPermission('manage_journalists')
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullNameFr', 'fullNameAr', 'roleFr', 'roleAr', 'bioFr', 'bioAr',
+              'careerFr', 'careerAr', 'coverageAreasFr', 'coverageAreasAr',
+              'photoUrl', 'socials', 'ownerUid', 'isVisible', 'updatedAt'
+            ])
+          )
+          ||
+          // Tier 2: Linked external journalist updating ONLY their own public biographical fields
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().ownerUid == existing().ownerUid
+            && incoming().isVisible == existing().isVisible
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullNameFr', 'fullNameAr', 'roleFr', 'roleAr', 'bioFr', 'bioAr',
+              'careerFr', 'careerAr', 'coverageAreasFr', 'coverageAreasAr',
+              'photoUrl', 'socials', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(journalistId)
+        && isFounder();
+    }
+
+    // =========================================================
+    // 5. EXTERNAL JOURNALIST SUBMISSIONS (/submissions/{submissionId})
+    // =========================================================
+    match /submissions/{submissionId} {
+      allow get: if isValidId(submissionId) && isVerifiedUser() && (
+        existing().authorUid == request.auth.uid
+        || isActiveFamilyAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        existing().authorUid == request.auth.uid
+        || isActiveFamilyAdmin()
+      );
+
+      allow create: if isVerifiedUser()
+        && isValidId(submissionId)
+        && isValidSubmission(incoming())
+        && incoming().authorUid == request.auth.uid
+        && incoming().authorEmail == userEmail()
+        && incoming().status == 'received'
+        && incoming().linkedArticleId == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(submissionId)
+        && isValidSubmission(incoming())
+        && incoming().authorUid == existing().authorUid
+        && incoming().authorEmail == existing().authorEmail
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            hasPermission('create_articles')
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'linkedArticleId', 'updatedAt'])
+          )
+          ||
+          (
+            existing().authorUid == request.auth.uid
+            && existing().status == 'received'
+            && incoming().status == 'received'
+            && incoming().linkedArticleId == ''
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'authorName', 'language', 'categoryId', 'titleFr', 'titleAr',
+              'summaryFr', 'summaryAr', 'contentFr', 'contentAr', 'notesForEditors', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(submissionId)
+        && (isFounder() || (existing().authorUid == request.auth.uid && existing().status == 'received'));
+    }
+
+    // =========================================================
+    // 6. PRIVATE FAMILY ADMIN ACCOUNTS (/adminUsers/{adminId})
+    // =========================================================
+    match /adminUsers/{adminId} {
+      allow get: if isValidId(adminId) && isVerifiedUser() && (
+        isFounder()
+        || existing().email == userEmail()
+      );
+      allow list: if isFounder();
+
+      allow create: if isFounder()
+        && isValidId(adminId)
+        && isValidAdminUser(incoming())
+        && incoming().updatedByEmail == userEmail()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (incoming().email == 'tmerzak@gmail.com' && incoming().role == 'founder' && incoming().isProtectedOwner == true)
+          || (incoming().email != 'tmerzak@gmail.com' && incoming().role != 'founder' && incoming().isProtectedOwner == false && incoming().permissions.manage_users == false)
+        );
+
+      allow update: if isFounder()
+        && isValidId(adminId)
+        && isValidAdminUser(incoming())
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedByEmail == userEmail()
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'familyRelation', 'role', 'isActive', 'permissions', 'updatedByEmail', 'updatedAt'
+        ])
+        && (
+          (existing().isProtectedOwner == true && incoming().role == 'founder' && incoming().isActive == true && incoming().isProtectedOwner == true)
+          || (existing().isProtectedOwner == false && incoming().role != 'founder' && incoming().isProtectedOwner == false && incoming().permissions.manage_users == false)
+        );
+
+      allow delete: if isFounder()
+        && isValidId(adminId)
+        && existing().isProtectedOwner == false
+        && existing().email != 'tmerzak@gmail.com';
+    }
+
+    // =========================================================
+    // 7. IMMUTABLE AUDIT LOGS (/auditLogs/{logId})
+    // =========================================================
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isActiveFamilyAdmin();
+      allow list: if isActiveFamilyAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(logId)
+        && isValidAuditLog(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().actorEmail == userEmail()
+        && incoming().createdAt == request.time
+        && isActiveFamilyAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

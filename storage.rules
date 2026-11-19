@@ -1,0 +1,44 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isVerifiedFamily() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true
+        && (
+          request.auth.token.email.lower() == 'tmerzak@gmail.com' ||
+          request.auth.token.email.lower() == 'badroumc@gmail.com' ||
+          request.auth.token.email.lower() == 'tigrine156@gmail.com' ||
+          request.auth.token.email.lower() == 'tigrinemelissalyna@gmail.com'
+        );
+    }
+
+    function isValidImageUpload() {
+      return request.resource != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|gif|svg\\+xml)');
+    }
+
+    // Public editorial media (article covers, site logo, journalist portraits)
+    match /media/{folder}/{fileName} {
+      allow read: if true;
+      allow write: if isVerifiedFamily()
+        && folder in ['articles', 'journalists', 'branding']
+        && isValidImageUpload();
+    }
+
+    // External journalist self-managed portrait upload scoped to their UID
+    match /journalist-avatars/{uid}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.uid == uid
+        && isValidImageUpload();
+    }
+
+    // Default deny everything else
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
