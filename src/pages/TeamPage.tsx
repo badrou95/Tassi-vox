@@ -34,6 +34,15 @@ export const TeamPage: React.FC = () => {
       </section>
 
       <div className="max-w-[1360px] mx-auto px-4 sm:px-6 py-12">
+        {visibleJournalists.length === 0 ? (
+          <div className="text-center py-16 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-[#111827]">
+            <p className="text-base font-medium text-slate-600 dark:text-slate-300">
+              {language === 'ar'
+                ? 'لا يوجد صحفيون منشورون حالياً في هيئة التحرير.'
+                : 'Aucun profil de journaliste publié pour le moment.'}
+            </p>
+          </div>
+        ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {visibleJournalists.map((j) => {
             const count = publishedArticles.filter((a) => a.authorId === j.id).length;
@@ -97,6 +106,7 @@ export const TeamPage: React.FC = () => {
             );
           })}
         </div>
+        )}
       </div>
     </PublicLayout>
   );

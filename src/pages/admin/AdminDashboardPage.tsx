@@ -279,17 +279,16 @@ export const AdminDashboardPage: React.FC = () => {
             </div>
           )}
 
-          {/* Founder 1-Click Initial Firebase Database Bootstrap */}
-          {isFounder && !isFirestoreSeeded && (
+          {/* Founder Optional 1-Click Demo Seed (only when Firestore is completely empty) */}
+          {isFounder && !isFirestoreSeeded && articles.length === 0 && journalists.length === 0 && (
             <div className="p-5 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1 text-sm">
                 <p className="font-bold text-slate-950 dark:text-white">
-                  Initialiser les collections Firebase Firestore
+                  Base Firebase vide — Charger les exemples de démonstration ? (optionnel)
                 </p>
                 <p className="text-xs text-slate-600 dark:text-slate-300">
-                  Enregistrez en un clic les 4 comptes familiaux autorisés, la charte graphique,
-                  l’équipe rédactionnelle, les articles bilingues et le bandeau Dernière Minute dans
-                  votre base Firestore.
+                  Vous pouvez soit ajouter directement vos propres articles et journalistes, soit
+                  pré-remplir la base avec les 4 comptes familiaux et des exemples de démonstration.
                 </p>
               </div>
               <button
@@ -300,7 +299,7 @@ export const AdminDashboardPage: React.FC = () => {
                 style={{ backgroundColor: effectiveSettings.primaryColor }}
               >
                 <Database className="w-4 h-4" />
-                <span>{seeding ? 'Initialisation…' : 'Initialiser Firebase'}</span>
+                <span>{seeding ? 'Initialisation…' : 'Charger les exemples'}</span>
               </button>
             </div>
           )}

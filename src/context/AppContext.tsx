@@ -107,6 +107,7 @@ interface AppContextValue {
   submissions: Submission[];
   adminUsers: AdminUser[];
   auditLogs: AuditLog[];
+  dataLoaded: boolean;
   isFirestoreSeeded: boolean;
 
   // Mutations (All write to Firestore + Audit Log)
@@ -541,6 +542,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     root.style.setProperty('--tv-breaking', effectiveSettings.breakingColor);
   }, [effectiveSettings]);
 
+  const dataLoaded = Boolean(
+    firestoreArticles !== null &&
+      firestoreJournalists !== null &&
+      firestoreBreaking !== null
+  );
+
   const isFirestoreSeeded = Boolean(
     firestoreSettings ||
       (firestoreArticles && firestoreArticles.length > 0) ||
@@ -549,10 +556,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firestoreAdminUsers.length > 0
   );
 
-  const articles =
-    firestoreArticles && (firestoreArticles.length > 0 || firestoreSettings)
-      ? firestoreArticles
-      : DEFAULT_ARTICLES;
+  // Strict Firestore-only collections: deleted demo items NEVER resurrect
+  const articles = firestoreArticles ?? [];
   const publishedArticles = useMemo(
     () =>
       articles
@@ -561,10 +566,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [articles]
   );
 
-  const breakingNews =
-    firestoreBreaking && (firestoreBreaking.length > 0 || firestoreSettings)
-      ? firestoreBreaking
-      : DEFAULT_BREAKING_NEWS;
+  const breakingNews = firestoreBreaking ?? [];
   const activeBreakingNews = useMemo(
     () =>
       breakingNews
@@ -573,10 +575,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [breakingNews]
   );
 
-  const journalists =
-    firestoreJournalists && (firestoreJournalists.length > 0 || firestoreSettings)
-      ? firestoreJournalists
-      : DEFAULT_JOURNALISTS;
+  const journalists = firestoreJournalists ?? [];
   const visibleJournalists = useMemo(
     () => journalists.filter((j) => j.isVisible),
     [journalists]
@@ -836,43 +835,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Permission requise pour supprimer une alerte.');
       }
       try {
-        const hasLiveItems = Boolean(firestoreBreaking && firestoreBreaking.length > 0);
-        if (!hasLiveItems) {
-          const batch = writeBatch(db);
-          const remaining = DEFAULT_BREAKING_NEWS.filter((b) => b.id !== id);
-          for (const b of remaining) {
-            batch.set(doc(db, 'breakingNews', b.id), {
-              textFr: b.textFr,
-              textAr: b.textAr,
-              articleSlug: b.articleSlug,
-              status: b.status,
-              sortOrder: b.sortOrder,
-              durationSeconds: b.durationSeconds,
-              expiresAt: b.expiresAt,
-              createdByUid: user.uid,
-              createdByEmail: userEmail,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          if (!firestoreSettings && canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
-            batch.set(doc(db, 'siteSettings', 'main'), {
-              ...DEFAULT_SITE_SETTINGS,
-              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
-              updatedByEmail: userEmail,
-              updatedAt: serverTimestamp(),
-            });
-          }
-          await batch.commit();
-        } else {
-          await deleteDoc(doc(db, 'breakingNews', id));
-        }
-        await writeAuditLog('DELETE_BREAKING_NEWS', 'breakingNews', id, 'Suppression d’une alerte Dernière Minute.');
+        await deleteDoc(doc(db, 'breakingNews', id));
+        await writeAuditLog('DELETE_BREAKING_NEWS', 'breakingNews', id, 'Suppression définitive d’une alerte Dernière Minute.');
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `breakingNews/${id}`);
       }
     },
-    [user, userEmail, emailVerified, adminUsers, firestoreBreaking, firestoreSettings, writeAuditLog]
+    [user, userEmail, emailVerified, adminUsers, writeAuditLog]
   );
 
   // Save Article (strictly validates Founder-only publish rule)
@@ -991,87 +960,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const nowIso = new Date().toISOString();
       const docRef = doc(db, 'articles', article.id);
       try {
-        const existsInDb = (await getDoc(docRef)).exists();
-        if (!existsInDb) {
-          // Starter catalog article not yet stored in Firestore:
-          // materialize starter articles so archiving/updating persists cleanly.
-          const hasLiveArticles = Boolean(firestoreArticles && firestoreArticles.length > 0);
-          if (!hasLiveArticles && !firestoreSettings && isFounder) {
-            const batch = writeBatch(db);
-            for (const a of DEFAULT_ARTICLES) {
-              const effectiveStatus = a.id === article.id ? nextStatus : a.status;
-              batch.set(doc(db, 'articles', a.id), {
-                slug: a.slug,
-                categoryId: a.categoryId,
-                authorId: a.authorId,
-                status: effectiveStatus,
-                isFeatured: a.isFeatured,
-                fr: a.fr,
-                ar: a.ar,
-                reviewNotes: a.id === article.id ? clampString(reviewNotes || a.reviewNotes, 2000) : a.reviewNotes,
-                createdByUid: user.uid,
-                createdByEmail: userEmail,
-                approvedByEmail: effectiveStatus === 'published' || effectiveStatus === 'approved' ? userEmail : a.approvedByEmail,
-                approvedAt: effectiveStatus === 'published' || effectiveStatus === 'approved' ? a.approvedAt || nowIso : a.approvedAt,
-                publishedAt: effectiveStatus === 'published' ? a.publishedAt || nowIso : a.publishedAt,
-                viewsCount: a.viewsCount,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-            }
-            if (canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
-              batch.set(doc(db, 'siteSettings', 'main'), {
-                ...DEFAULT_SITE_SETTINGS,
-                socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
-                updatedByEmail: userEmail,
-                updatedAt: serverTimestamp(),
-              });
-            }
-            await batch.commit();
-          } else {
-            // Non-founder archiving an unseeded starter article: create as draft first if needed, or save directly if allowed
-            if (!isFounder && nextStatus === 'archived') {
-              await setDoc(docRef, {
-                slug: clampString(article.slug, 120),
-                categoryId: clampString(article.categoryId, 64),
-                authorId: clampString(article.authorId, 128),
-                status: 'draft',
-                isFeatured: Boolean(article.isFeatured),
-                fr: article.fr,
-                ar: article.ar,
-                reviewNotes: '',
-                createdByUid: user.uid,
-                createdByEmail: userEmail,
-                approvedByEmail: '',
-                approvedAt: '',
-                publishedAt: '',
-                viewsCount: article.viewsCount || 0,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-              await updateDoc(docRef, { status: 'archived', updatedAt: serverTimestamp() });
-            } else {
-              await setDoc(docRef, {
-                slug: clampString(article.slug, 120),
-                categoryId: clampString(article.categoryId, 64),
-                authorId: clampString(article.authorId, 128),
-                status: nextStatus,
-                isFeatured: Boolean(article.isFeatured),
-                fr: article.fr,
-                ar: article.ar,
-                reviewNotes: isFounder ? clampString(reviewNotes || article.reviewNotes, 2000) : '',
-                createdByUid: user.uid,
-                createdByEmail: userEmail,
-                approvedByEmail: isFounder && (nextStatus === 'approved' || nextStatus === 'published') ? userEmail : '',
-                approvedAt: isFounder && (nextStatus === 'approved' || nextStatus === 'published') ? nowIso : '',
-                publishedAt: isFounder && nextStatus === 'published' ? nowIso : '',
-                viewsCount: article.viewsCount || 0,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-            }
-          }
-        } else if (isFounder) {
+        if (isFounder) {
           const patch: Record<string, unknown> = {
             status: nextStatus,
             reviewNotes: clampString(reviewNotes || article.reviewNotes, 2000),
@@ -1102,71 +991,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handleFirestoreError(err, OperationType.UPDATE, `articles/${article.id}`);
       }
     },
-    [user, userEmail, emailVerified, adminUsers, isFounder, firestoreArticles, firestoreSettings, writeAuditLog]
+    [user, userEmail, emailVerified, adminUsers, isFounder, writeAuditLog]
   );
 
   const deleteArticle = useCallback(
     async (article: Article) => {
       if (!user) throw new Error('Authentification requise.');
-      if (!isFounder && !canUserPerform(userEmail, emailVerified, 'delete_articles', adminUsers)) {
+      const canDelete =
+        isFounder ||
+        canUserPerform(userEmail, emailVerified, 'delete_articles', adminUsers) ||
+        (article.status === 'archived' &&
+          canUserPerform(userEmail, emailVerified, 'edit_all_articles', adminUsers));
+      if (!canDelete) {
         throw new Error('Permission "Supprimer des articles" requise.');
       }
       try {
-        const hasLiveArticles = Boolean(firestoreArticles && firestoreArticles.length > 0);
-        if (!hasLiveArticles && !firestoreSettings) {
-          // Starter catalog not yet materialized in Firestore: persist remaining starter articles + siteSettings
-          const batch = writeBatch(db);
-          const remaining = DEFAULT_ARTICLES.filter((a) => a.id !== article.id);
-          for (const a of remaining) {
-            const safeStatus: ArticleStatus = isFounder
-              ? a.status
-              : a.status === 'published' || a.status === 'approved'
-                ? 'pending_review'
-                : a.status;
-            batch.set(doc(db, 'articles', a.id), {
-              slug: a.slug,
-              categoryId: a.categoryId,
-              authorId: a.authorId,
-              status: safeStatus,
-              isFeatured: a.isFeatured,
-              fr: a.fr,
-              ar: a.ar,
-              reviewNotes: isFounder ? a.reviewNotes : '',
-              createdByUid: user.uid,
-              createdByEmail: userEmail,
-              approvedByEmail: isFounder && safeStatus === 'published' ? userEmail : '',
-              approvedAt: isFounder && safeStatus === 'published' ? a.approvedAt : '',
-              publishedAt: isFounder && safeStatus === 'published' ? a.publishedAt : '',
-              viewsCount: a.viewsCount,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          if (canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
-            batch.set(doc(db, 'siteSettings', 'main'), {
-              ...DEFAULT_SITE_SETTINGS,
-              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
-              updatedByEmail: userEmail,
-              updatedAt: serverTimestamp(),
-            });
-          }
-          await batch.commit();
-        } else {
-          await deleteDoc(doc(db, 'articles', article.id));
-          if (
-            firestoreArticles &&
-            firestoreArticles.length <= 1 &&
-            !firestoreSettings &&
-            canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)
-          ) {
-            await setDoc(doc(db, 'siteSettings', 'main'), {
-              ...DEFAULT_SITE_SETTINGS,
-              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
-              updatedByEmail: userEmail,
-              updatedAt: serverTimestamp(),
-            });
-          }
-        }
+        await deleteDoc(doc(db, 'articles', article.id));
 
         // Clean up Firebase Storage cover images to genuinely free storage space
         const urlsToFree = Array.from(
@@ -1184,13 +1024,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handleFirestoreError(err, OperationType.DELETE, `articles/${article.id}`);
       }
     },
-    [user, isFounder, userEmail, emailVerified, adminUsers, firestoreArticles, firestoreSettings, writeAuditLog]
+    [user, isFounder, userEmail, emailVerified, adminUsers, writeAuditLog]
   );
 
   // Bulk-purge all archived articles + their Firebase Storage images to free space
   const purgeArchivedArticles = useCallback(async (): Promise<number> => {
     if (!user) throw new Error('Authentification requise.');
-    if (!isFounder && !canUserPerform(userEmail, emailVerified, 'delete_articles', adminUsers)) {
+    const canPurge =
+      isFounder ||
+      canUserPerform(userEmail, emailVerified, 'delete_articles', adminUsers) ||
+      canUserPerform(userEmail, emailVerified, 'edit_all_articles', adminUsers);
+    if (!canPurge) {
       throw new Error('Permission "Supprimer des articles" requise pour vider les archives.');
     }
     const archived = articles.filter((a) => a.status === 'archived');
@@ -1321,64 +1165,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Permission "Gérer les profils des journalistes" requise pour supprimer une fiche.');
       }
       try {
-        const hasLiveJournalists = Boolean(firestoreJournalists && firestoreJournalists.length > 0);
-        if (!hasLiveJournalists && !firestoreSettings) {
-          // Starter catalog has not been materialized in Firestore yet:
-          // persist remaining starter journalists + siteSettings so the deleted journalist disappears immediately.
-          const batch = writeBatch(db);
-          const remaining = DEFAULT_JOURNALISTS.filter((j) => j.id !== id);
-          for (const j of remaining) {
-            batch.set(doc(db, 'journalists', j.id), {
-              fullNameFr: j.fullNameFr,
-              fullNameAr: j.fullNameAr,
-              roleFr: j.roleFr,
-              roleAr: j.roleAr,
-              bioFr: j.bioFr,
-              bioAr: j.bioAr,
-              careerFr: j.careerFr,
-              careerAr: j.careerAr,
-              coverageAreasFr: j.coverageAreasFr,
-              coverageAreasAr: j.coverageAreasAr,
-              photoUrl: j.photoUrl,
-              socials: sanitizeSocials(j.socials),
-              ownerUid: j.ownerUid,
-              isVisible: j.isVisible,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          if (canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)) {
-            batch.set(doc(db, 'siteSettings', 'main'), {
-              ...DEFAULT_SITE_SETTINGS,
-              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
-              updatedByEmail: userEmail,
-              updatedAt: serverTimestamp(),
-            });
-          }
-          await batch.commit();
-        } else {
-          await deleteDoc(doc(db, 'journalists', id));
-          // Ensure deleting the last journalist does not resurrect starter defaults
-          if (
-            firestoreJournalists &&
-            firestoreJournalists.length <= 1 &&
-            !firestoreSettings &&
-            canUserPerform(userEmail, emailVerified, 'manage_site_settings', adminUsers)
-          ) {
-            await setDoc(doc(db, 'siteSettings', 'main'), {
-              ...DEFAULT_SITE_SETTINGS,
-              socials: sanitizeSocials(DEFAULT_SITE_SETTINGS.socials),
-              updatedByEmail: userEmail,
-              updatedAt: serverTimestamp(),
-            });
-          }
-        }
-        await writeAuditLog('DELETE_JOURNALIST', 'journalists', id, 'Suppression d’une fiche journaliste.');
+        await deleteDoc(doc(db, 'journalists', id));
+        await writeAuditLog('DELETE_JOURNALIST', 'journalists', id, 'Suppression définitive d’une fiche journaliste.');
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `journalists/${id}`);
       }
     },
-    [user, isFounder, userEmail, emailVerified, adminUsers, firestoreJournalists, firestoreSettings, writeAuditLog]
+    [user, isFounder, userEmail, emailVerified, adminUsers, writeAuditLog]
   );
 
   // External journalist account registration (strictly starts as 'pending', awaits Direction approval)
@@ -1715,6 +1508,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     submissions: firestoreSubmissions,
     adminUsers,
     auditLogs: firestoreAuditLogs,
+    dataLoaded,
     isFirestoreSeeded,
     seedInitialDatabase,
     saveSiteSettings,

@@ -114,7 +114,12 @@ export const AdminArticlesTab: React.FC = () => {
 
   const canArchiveArticles =
     isFounder || currentPermissions.delete_articles || currentPermissions.edit_all_articles;
-  const canDeleteArticles = isFounder || currentPermissions.delete_articles;
+  const canPurgeArchives =
+    isFounder || currentPermissions.delete_articles || currentPermissions.edit_all_articles;
+  const canDeleteArticle = (a: Article) =>
+    isFounder ||
+    currentPermissions.delete_articles ||
+    (a.status === 'archived' && currentPermissions.edit_all_articles);
 
   const startCreate = () => {
     setError('');
@@ -124,7 +129,7 @@ export const AdminArticlesTab: React.FC = () => {
     setEditing(
       createBlankArticle(
         effectiveSettings.categories[0]?.id || 'geopolitique',
-        journalists[0]?.id || 'karim-benali'
+        journalists[0]?.id || 'redaction'
       )
     );
   };
@@ -376,9 +381,13 @@ export const AdminArticlesTab: React.FC = () => {
                 onChange={(e) => setEditing({ ...editing, authorId: e.target.value })}
                 className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"
               >
+                {journalists.length === 0 && (
+                  <option value="redaction">Rédaction {effectiveSettings.mediaName}</option>
+                )}
                 {journalists.map((j) => (
                   <option key={j.id} value={j.id}>
-                    {j.fullNameFr} ({j.fullNameAr})
+                    {j.fullNameFr || j.fullNameAr}
+                    {j.fullNameFr && j.fullNameAr ? ` (${j.fullNameAr})` : ''}
                   </option>
                 ))}
               </select>
@@ -593,7 +602,7 @@ export const AdminArticlesTab: React.FC = () => {
               </span>
             </div>
 
-            {canDeleteArticles && archivedCount > 0 && (
+            {canPurgeArchives && archivedCount > 0 && (
               <div className="flex items-center gap-2 shrink-0">
                 {confirmPurgeArchives ? (
                   <>
@@ -801,7 +810,7 @@ export const AdminArticlesTab: React.FC = () => {
                   )}
 
                   {/* Permanent delete with inline 2-step confirmation (frees Firestore + Storage) */}
-                  {canDeleteArticles &&
+                  {canDeleteArticle(article) &&
                     (confirmDeleteId === article.id ? (
                       <div className="flex items-center gap-1.5">
                         <button

@@ -584,6 +584,7 @@ service cloud.firestore {
         && (
           isFounder()
           || hasPermission('delete_articles')
+          || (existing().status == 'archived' && hasPermission('edit_all_articles'))
         );
     }
 
